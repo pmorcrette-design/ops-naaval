@@ -66,6 +66,7 @@ const state = {
   selectedCustomerId: null,
   selectedRecurringRouteId: null,
   selectedOpsUserId: null,
+  editingOpsUserId: null,
   selectedOptimizerRouteId: null,
   selectedPlanningJobId: null,
   selectedComparePlanIds: [],
@@ -2352,6 +2353,8 @@ function loginWithProfile(profile, source = "password") {
   state.isAuthenticated = true;
   state.currentUser = {
     id: profile.id ?? createId("session"),
+    firstName: profile.firstName ?? "",
+    lastName: profile.lastName ?? "",
     name: profile.name ?? joinNameParts(profile.firstName, profile.lastName) ?? "Ops User",
     email: profile.email,
     source
@@ -2832,6 +2835,9 @@ function ensureSelections() {
 
   if (!opsUsers.some((user) => user.id === state.selectedOpsUserId)) {
     state.selectedOpsUserId = opsUsers[0]?.id ?? null;
+  }
+  if (!opsUsers.some((user) => user.id === state.editingOpsUserId)) {
+    state.editingOpsUserId = null;
   }
 
   if (!inboxThreads.some((thread) => thread.id === state.selectedInboxThreadId)) {
@@ -5721,6 +5727,7 @@ function renderAdminPricingCard(algo) {
 }
 
 function renderAdminView() {
+  const editingOpsUser = state.editingOpsUserId ? state.opsUsers.find((candidate) => candidate.id === state.editingOpsUserId) : null;
   const usersMarkup =
     state.opsUsers.length > 0
       ? state.opsUsers
@@ -5777,45 +5784,49 @@ function renderAdminView() {
         <div class="admin-card__header">
           <div>
             <p class="eyebrow">User</p>
-            <h3>Create Ops Accounts</h3>
+            <h3>${editingOpsUser ? "Edit Ops Account" : "Create Ops Accounts"}</h3>
           </div>
         </div>
 
         <form id="ops-user-form" class="admin-form-stack">
+          <input type="hidden" name="userId" value="${escapeHtml(editingOpsUser?.id ?? "")}" />
           <div class="form-grid">
             <label class="field">
               <span>First Name</span>
-              <input name="firstName" placeholder="Amina" required />
+              <input name="firstName" placeholder="Amina" value="${escapeHtml(editingOpsUser?.firstName ?? "")}" required />
             </label>
             <label class="field">
               <span>Last Name</span>
-              <input name="lastName" placeholder="Laurent" required />
+              <input name="lastName" placeholder="Laurent" value="${escapeHtml(editingOpsUser?.lastName ?? "")}" required />
             </label>
             <label class="field">
               <span>Email</span>
-              <input name="email" type="email" placeholder="ops@naaval.app" required />
+              <input name="email" type="email" placeholder="ops@naaval.app" value="${escapeHtml(editingOpsUser?.email ?? "")}" required />
             </label>
             <label class="field">
               <span>Role</span>
               <select name="role">
-                <option value="ops_admin">Ops Admin</option>
-                <option value="ops_manager">Ops Manager</option>
-                <option value="ops_dispatcher">Dispatcher</option>
-                <option value="ops_agent">Ops Agent</option>
+                <option value="ops_admin" ${editingOpsUser?.role === "ops_admin" ? "selected" : ""}>Ops Admin</option>
+                <option value="ops_manager" ${editingOpsUser?.role === "ops_manager" ? "selected" : ""}>Ops Manager</option>
+                <option value="ops_dispatcher" ${editingOpsUser?.role === "ops_dispatcher" ? "selected" : ""}>Dispatcher</option>
+                <option value="ops_agent" ${!editingOpsUser || editingOpsUser?.role === "ops_agent" ? "selected" : ""}>Ops Agent</option>
               </select>
             </label>
             <label class="field">
               <span>Team</span>
-              <input name="team" value="Operations" />
+              <input name="team" value="${escapeHtml(editingOpsUser?.team ?? "Operations")}" />
             </label>
             <label class="field">
               <span>Temporary Password</span>
-              <input name="temporaryPassword" placeholder="Temp-Password-001" />
+              <input name="temporaryPassword" placeholder="Temp-Password-001" value="${escapeHtml(editingOpsUser?.temporaryPassword ?? "")}" />
             </label>
           </div>
 
+          <p class="panel__subtitle">${editingOpsUser ? "Update the ops account, then save the changes. The login password used on the dashboard is the temporary password shown here." : "This password is the one the new ops user will use on the login page. If you leave it empty, it defaults to <code>demo</code>."}</p>
+
           <div class="form-actions admin-actions">
-            <button class="solid-button" type="submit">Create Ops User</button>
+            ${editingOpsUser ? '<button class="ghost-button" type="button" data-action="cancel-edit-ops-user">Cancel</button>' : ""}
+            <button class="solid-button" type="submit">${editingOpsUser ? "Save Ops User" : "Create Ops User"}</button>
           </div>
         </form>
 
@@ -5978,6 +5989,7 @@ function renderOpsUserDetailModal() {
         <section class="form-section">
           <div class="detail-list">
             <div class="detail-row"><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
+            <div class="detail-row"><span>Login Password</span><strong>${escapeHtml(user.temporaryPassword || "demo")}</strong></div>
             <div class="detail-row"><span>Role</span><strong>${escapeHtml(labelForOpsRole(user.role))}</strong></div>
             <div class="detail-row"><span>Team</span><strong>${escapeHtml(user.team ?? "Operations")}</strong></div>
             <div class="detail-row"><span>Status</span><strong>${escapeHtml(capitalize(user.status ?? "active"))}</strong></div>
@@ -5986,6 +5998,7 @@ function renderOpsUserDetailModal() {
 
         <div class="form-actions">
           <button class="ghost-button" type="button" data-close-modal="ops-user-detail">Close</button>
+          <button class="ghost-button" type="button" data-action="edit-ops-user" data-ops-user-id="${user.id}">Edit User</button>
           <button class="solid-button" type="button" data-action="delete-ops-user" data-ops-user-id="${user.id}">Delete User</button>
         </div>
       `
@@ -6172,7 +6185,7 @@ function render() {
   document.querySelector(".main")?.classList.toggle("main--optimizer", state.activeView === "optimizer");
   const heroName = document.querySelector(".hero__title span");
   if (heroName) {
-    heroName.textContent = state.currentUser?.name?.split(" ")[0] ?? "Pierre";
+    heroName.textContent = state.currentUser?.firstName || state.currentUser?.name?.split(" ")[0] || "Pierre";
   }
   renderNav();
   renderMetrics();
@@ -7059,13 +7072,14 @@ async function handleOpsUserSubmit(event) {
   event.preventDefault();
 
   const form = event.currentTarget;
+  const editingUserId = form.elements.userId?.value.trim() || "";
   const payload = {
     firstName: form.elements.firstName.value.trim(),
     lastName: form.elements.lastName.value.trim(),
     email: form.elements.email.value.trim(),
     role: form.elements.role.value,
     team: form.elements.team.value.trim() || "Operations",
-    temporaryPassword: form.elements.temporaryPassword.value.trim(),
+    temporaryPassword: form.elements.temporaryPassword.value.trim() || "demo",
     status: "active"
   };
 
@@ -7075,25 +7089,45 @@ async function handleOpsUserSubmit(event) {
   }
 
   try {
+    let savedUser = null;
     if (state.apiAvailable) {
-      await postJson("/admin/users", payload);
+      if (editingUserId) {
+        savedUser = await patchJson(`/admin/users/${editingUserId}`, payload);
+      } else {
+        savedUser = await postJson("/admin/users", payload);
+      }
       await refreshData();
     } else {
-      localDb.opsUsers.unshift({
-        id: createId("ops_user"),
-        ...payload,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+      savedUser = editingUserId
+        ? {
+            ...(localDb.opsUsers.find((candidate) => candidate.id === editingUserId) ?? {}),
+            id: editingUserId,
+            ...payload,
+            updatedAt: new Date().toISOString()
+          }
+        : {
+            id: createId("ops_user"),
+            ...payload,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+      if (editingUserId) {
+        localDb.opsUsers = (localDb.opsUsers ?? []).map((candidate) => (candidate.id === editingUserId ? savedUser : candidate));
+      } else {
+        localDb.opsUsers.unshift(savedUser);
+      }
       loadFromLocal();
       ensureSelections();
       render();
     }
 
     form.reset();
-    showToast(`Ops user ${payload.firstName} ${payload.lastName} created.`);
+    state.editingOpsUserId = null;
+    state.selectedOpsUserId = savedUser?.id ?? editingUserId || state.selectedOpsUserId;
+    render();
+    showToast(`Ops user ${payload.firstName} ${editingUserId ? "updated" : "created"}. Login: ${payload.email} / ${payload.temporaryPassword}`);
   } catch (error) {
-    showToast(`Unable to create ops user: ${error.message}`, "error");
+    showToast(`Unable to ${editingUserId ? "update" : "create"} ops user: ${error.message}`, "error");
   }
 }
 
@@ -7117,6 +7151,9 @@ async function deleteOpsUser(userId) {
 
     if (state.selectedOpsUserId === userId) {
       closeModal("ops-user-detail");
+    }
+    if (state.editingOpsUserId === userId) {
+      state.editingOpsUserId = null;
     }
 
     showToast(`Ops user ${joinNameParts(user.firstName, user.lastName) || user.email} deleted.`);
@@ -8086,6 +8123,15 @@ function handleDocumentClick(event) {
       return;
     }
 
+    if (action === "edit-ops-user") {
+      state.editingOpsUserId = actionButton.getAttribute("data-ops-user-id");
+      state.selectedOpsUserId = state.editingOpsUserId;
+      state.adminSection = "users";
+      closeModal("ops-user-detail");
+      render();
+      return;
+    }
+
     if (action === "open-recurring-route-detail") {
       state.selectedRecurringRouteId = actionButton.getAttribute("data-recurring-route-id");
       render();
@@ -8305,6 +8351,12 @@ function handleDocumentClick(event) {
       return;
     }
 
+    if (action === "cancel-edit-ops-user") {
+      state.editingOpsUserId = null;
+      render();
+      return;
+    }
+
     if (action === "open-quote") {
       state.quoteContext = getQuoteContextForSource(actionButton.getAttribute("data-quote-source"));
       document.querySelector("#quote-form")?.reset();
@@ -8517,12 +8569,14 @@ function handleLoginSubmit(event) {
           id: "ops_demo_pierre",
           firstName: "Pierre",
           lastName: "Ops",
-          email
+          email,
+          temporaryPassword: "demo"
         }
       : null);
+  const expectedPassword = String(matchingUser?.temporaryPassword ?? "demo").trim() || "demo";
 
-  if (!matchingUser || password !== "demo") {
-    showToast("Use a valid ops email and the demo password `demo`.", "error");
+  if (!matchingUser || password !== expectedPassword) {
+    showToast("Use a valid ops email and the matching temporary password.", "error");
     return;
   }
 
