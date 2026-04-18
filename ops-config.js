@@ -1,0 +1,5 @@
+window.NAAVAL_API_BASE_URL = "";
+window.NAAVAL_GOOGLE_CLIENT_ID = "";
+window.NAAVAL_GOOGLE_MAPS_EMBED_KEY = "";
+window.NAAVAL_GOOGLE_ONE_TAP = false;
+window.NAAVAL_MAP_PROVIDER = "google";

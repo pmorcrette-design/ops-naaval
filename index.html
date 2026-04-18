@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Naaval Ops Web</title>
+    <meta name="theme-color" content="#129a79" />
+    <link rel="icon" type="image/svg+xml" href="./assets/logo-mark.svg" />
+    <link rel="shortcut icon" href="./assets/logo-mark.svg" />
+    <link rel="apple-touch-icon" href="./assets/logo-mark.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./ops-config.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <div class="login-gate" id="login-gate">
+      <div class="login-card">
+        <section class="login-card__brandpane">
+          <div class="login-card__brandcopy">
+            <img src="./assets/logo-mark.svg" alt="Naaval" class="login-card__logo" />
+            <p class="eyebrow login-brand-eyebrow">Naaval Control Tower</p>
+            <h1>Operate last-mile with a control tower built for ops.</h1>
+            <p class="login-card__subtitle">Plan, dispatch, price, and supervise the carrier network from one clean operational surface.</p>
+          </div>
+
+          <div class="login-feature-grid">
+            <article class="login-feature">
+              <span class="mini-chip">Dispatch</span>
+              <strong>Orders, drivers, optimizer, and recurring routes in one place.</strong>
+            </article>
+            <article class="login-feature">
+              <span class="mini-chip">Pricing</span>
+              <strong>Quote, pricing algo, and customer workflows connected to accounts.</strong>
+            </article>
+            <article class="login-feature">
+              <span class="mini-chip">Visibility</span>
+              <strong>Live route progress, WhatsApp-style inbox, and customer follow-up.</strong>
+            </article>
+            <article class="login-feature">
+              <span class="mini-chip">Maps</span>
+              <strong>Google Maps embeds when your API key is configured in local setup.</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="login-card__formpane">
+          <div class="login-form-shell">
+            <p class="eyebrow">Ops Login</p>
+            <h2>Access the ops interface</h2>
+            <p class="login-card__helper">Use your ops credentials or Google Sign-In to unlock the Naaval operations workspace.</p>
+
+            <form id="login-form" class="stack">
+              <label class="field">
+                <span>Email</span>
+                <input name="email" type="email" placeholder="pierre@naaval.app" required />
+              </label>
+
+              <label class="field">
+                <span>Password</span>
+                <input name="password" type="password" placeholder="demo" required />
+              </label>
+
+              <div class="form-actions login-card__actions">
+                <button class="solid-button" type="submit">Login</button>
+              </div>
+            </form>
+
+            <div class="login-divider"><span>or</span></div>
+            <div class="login-google-slot" id="google-login-slot"></div>
+            <button class="ghost-button login-google-button hidden" id="google-login-button" type="button">Continue with Google</button>
+
+            <div class="login-credentials">
+              <strong>Demo access</strong>
+              <p><code>pierre@naaval.app</code> with password <code>demo</code>.</p>
+              <p>For live Google Sign-In and Google Maps, fill <code>ops-config.js</code> with your Google Client ID and Maps API key.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="ui-scale-root">
+      <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar__brand">
+          <img src="./assets/logo-mark.svg" alt="Naaval" class="sidebar__logo" />
+        </div>
+
+        <button class="primary-cta" type="button" data-open-modal="order">
+          <span class="primary-cta__plus">+</span>
+          <span>New Order</span>
+        </button>
+
+        <nav class="nav">
+          <button class="nav__item nav__item--active" type="button" data-view="orders">
+            <span class="nav__icon" aria-hidden="true">MO</span>
+            <span>My Orders</span>
+          </button>
+          <button class="nav__item" type="button" data-view="drivers">
+            <span class="nav__icon" aria-hidden="true">DR</span>
+            <span>Drivers</span>
+          </button>
+          <button class="nav__item" type="button" data-view="optimizer">
+            <span class="nav__icon" aria-hidden="true">OP</span>
+            <span>Optimizer</span>
+          </button>
+          <button class="nav__item" type="button" data-view="customers">
+            <span class="nav__icon" aria-hidden="true">CU</span>
+            <span>Customers</span>
+          </button>
+          <button class="nav__item" type="button" data-view="recurring-routes">
+            <span class="nav__icon" aria-hidden="true">RR</span>
+            <span>Recurring Routes</span>
+          </button>
+          <button class="nav__item" type="button" data-view="pricing">
+            <span class="nav__icon" aria-hidden="true">PS</span>
+            <span>Pricing Simulator</span>
+          </button>
+          <button class="nav__item" type="button" data-view="admin">
+            <span class="nav__icon" aria-hidden="true">AD</span>
+            <span>Admin</span>
+          </button>
+        </nav>
+
+        <div class="sidebar__footer">
+          <button class="nav__item" type="button" data-view="inbox">
+            <span class="nav__icon" aria-hidden="true">IN</span>
+            <span>Inbox</span>
+          </button>
+          <button class="nav__item" type="button">
+            <span class="nav__icon" aria-hidden="true">SU</span>
+            <span>Support</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="top-chrome">
+          <header class="hero">
+            <div>
+              <p class="eyebrow">Naaval Control Tower</p>
+              <h1 class="hero__title">Welcome, <span>Pierre</span>.</h1>
+              <p class="hero__subtitle">
+                Create orders, supervise drivers, and push route optimization from one operational surface.
+              </p>
+            </div>
+            <div class="hero__meta">
+              <div class="signal-card">
+                <span class="signal-card__label">Solver</span>
+                <strong id="solver-mode">Loading</strong>
+              </div>
+              <div class="signal-card">
+                <span class="signal-card__label">Data Source</span>
+                <strong id="data-mode">Loading</strong>
+              </div>
+              <div class="signal-card signal-card--session">
+                <span class="signal-card__label">Session</span>
+                <strong id="session-mode">Locked</strong>
+                <button class="subtle-button subtle-button--small hidden" id="logout-button" type="button" data-action="logout">Logout</button>
+              </div>
+            </div>
+          </header>
+
+          <section class="summary-grid" aria-label="Operational summary">
+            <article class="metric-card">
+              <span class="metric-card__label" id="metric-orders-label">Orders</span>
+              <strong class="metric-card__value" id="metric-orders">0</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-card__label" id="metric-ready-label">Ready To Plan</span>
+              <strong class="metric-card__value" id="metric-ready">0</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-card__label" id="metric-drivers-label">Drivers</span>
+              <strong class="metric-card__value" id="metric-drivers">0</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-card__label" id="metric-routes-label">Live Routes</span>
+              <strong class="metric-card__value" id="metric-routes">0</strong>
+            </article>
+            <article class="metric-card metric-card--revenue">
+              <span class="metric-card__label" id="metric-revenue-label">Daily Revenue</span>
+              <strong class="metric-card__value" id="metric-revenue">0 €</strong>
+            </article>
+          </section>
+
+          <div class="summary-controls">
+            <label class="date-filter-card">
+              <span class="signal-card__label">Display Date</span>
+              <input id="selected-date" type="date" />
+            </label>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel__header">
+            <div>
+              <p class="eyebrow" id="panel-eyebrow">Operations</p>
+              <h2 id="panel-title">My Orders</h2>
+              <p class="panel__subtitle" id="panel-subtitle">
+                Follow each delivery, assignment, and customer promise from a single queue.
+              </p>
+            </div>
+
+            <div class="toolbar" id="toolbar-actions"></div>
+          </div>
+
+          <div id="workspace-content"></div>
+        </section>
+      </main>
+      </div>
+
+      <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+      <input id="csv-import-input" class="hidden" type="file" accept=".csv,text/csv" />
+
+    <div class="modal hidden" id="order-detail-modal">
+      <div class="modal__backdrop" data-close-modal="order-detail"></div>
+      <div class="modal__dialog modal__dialog--detail">
+        <button class="modal__close" type="button" data-close-modal="order-detail">Close</button>
+        <div id="order-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="driver-detail-modal">
+      <div class="modal__backdrop" data-close-modal="driver-detail"></div>
+      <div class="modal__dialog modal__dialog--detail">
+        <button class="modal__close" type="button" data-close-modal="driver-detail">Close</button>
+        <div id="driver-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="customer-detail-modal">
+      <div class="modal__backdrop" data-close-modal="customer-detail"></div>
+      <div class="modal__dialog modal__dialog--detail">
+        <button class="modal__close" type="button" data-close-modal="customer-detail">Close</button>
+        <div id="customer-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="customer-modal">
+      <div class="modal__backdrop" data-close-modal="customer"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="customer">Close</button>
+        <p class="eyebrow">CRM</p>
+        <h3 id="customer-modal-title">Create Customer</h3>
+        <p class="modal__subtitle" id="customer-modal-subtitle">Create a customer account once, then reuse it across ops, quotes, and the client portal.</p>
+
+        <form id="customer-form" class="stack">
+          <input name="customerId" type="hidden" />
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Company</p>
+                <h4>Account Setup</h4>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Company Name</span>
+                <input name="companyName" placeholder="Maison Du Son" required />
+              </label>
+
+              <label class="field">
+                <span>VAT Number</span>
+                <input name="vatNumber" placeholder="FR12345678901" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Headquarters Address</span>
+                <input name="headquartersAddress" placeholder="15 rue de la justice, 78100 Saint-Germain-en-Laye" required />
+              </label>
+
+              <label class="field">
+                <span>Company Email</span>
+                <input name="companyEmail" type="email" placeholder="ops@company.com" />
+              </label>
+
+              <label class="field">
+                <span>Company Phone</span>
+                <input name="companyPhone" placeholder="+33100000000" />
+              </label>
+
+              <label class="field">
+                <span>Pricing Algo</span>
+                <select name="pricingAlgorithmId">
+                  <option value="basic">Basic Algo</option>
+                  <option value="pallet">Palette</option>
+                  <option value="hours">By Hours</option>
+                  <option value="drops">By Drop</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Contact</p>
+                <h4>Primary Contact</h4>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>First Name</span>
+                <input name="contactFirstName" placeholder="Pierre" />
+              </label>
+
+              <label class="field">
+                <span>Last Name</span>
+                <input name="contactLastName" placeholder="Morcrette" />
+              </label>
+
+              <label class="field">
+                <span>Contact Email</span>
+                <input name="contactEmail" type="email" placeholder="pierre@company.com" />
+              </label>
+
+              <label class="field">
+                <span>Contact Phone</span>
+                <input name="contactPhone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field">
+                <span>Revenue Range</span>
+                <select name="revenueRange">
+                  <option value="0-500k">0 - 500k</option>
+                  <option value="500k-2m">500k - 2m</option>
+                  <option value="2m-10m">2m - 10m</option>
+                  <option value="10m+">10m+</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Company Size</span>
+                <select name="companySize">
+                  <option value="micro">Micro</option>
+                  <option value="smb" selected>SMB</option>
+                  <option value="mid_market">Mid-market</option>
+                  <option value="enterprise">Enterprise</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="customer">Cancel</button>
+            <button class="solid-button" id="customer-submit-button" type="submit">Create Customer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="ops-user-detail-modal">
+      <div class="modal__backdrop" data-close-modal="ops-user-detail"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="ops-user-detail">Close</button>
+        <div id="ops-user-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="recurring-route-detail-modal">
+      <div class="modal__backdrop" data-close-modal="recurring-route-detail"></div>
+      <div class="modal__dialog modal__dialog--detail">
+        <button class="modal__close" type="button" data-close-modal="recurring-route-detail">Close</button>
+        <div id="recurring-route-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="recurring-route-modal">
+      <div class="modal__backdrop" data-close-modal="recurring-route"></div>
+      <div class="modal__dialog">
+        <button class="modal__close" type="button" data-close-modal="recurring-route">Close</button>
+        <p class="eyebrow">Planning</p>
+        <h3>Create Recurring Delivery</h3>
+        <p class="modal__subtitle">Set the pickup schedule, choose the service days, then configure pickup and dropoff details like a standard order.</p>
+
+        <form id="recurring-route-form" class="stack">
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Schedule</p>
+              <h4>Recurring Delivery Setup</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Recurring Label</span>
+                <input name="recurringLabel" placeholder="Morning City Wave" required />
+              </label>
+
+              <label class="field">
+                <span>Reference</span>
+                <input name="reference" placeholder="RR-NAAV-001" />
+              </label>
+
+              <label class="field">
+                <span>Flow</span>
+                <select name="kind">
+                  <option value="delivery">Delivery</option>
+                  <option value="pickup_delivery">Pickup + Delivery</option>
+                  <option value="return">Return</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Pickup Time</span>
+                <input name="recurringPickupTime" type="time" required />
+              </label>
+
+              <label class="field">
+                <span>Merchant ID</span>
+                <input name="merchantId" value="merchant_demo" required />
+              </label>
+
+              <label class="field">
+                <span>Hub ID</span>
+                <input name="hubId" value="hub_paris_central" />
+              </label>
+
+              <label class="field">
+                <span>Pricing Algo</span>
+                <select name="pricingAlgorithmId">
+                  <option value="basic">Basic Algo</option>
+                  <option value="pallet">Palette</option>
+                  <option value="hours">By Hours</option>
+                  <option value="drops">By Drop</option>
+                </select>
+              </label>
+
+              <label class="field field--wide">
+                <span>Planner Note</span>
+                <textarea name="notes" rows="2" placeholder="Operating note, access instructions, volume expectations..."></textarea>
+              </label>
+            </div>
+
+            <div class="weekday-selector">
+              <span class="field__label-inline">Pickup Days</span>
+              <div class="weekday-selector__list">
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="mon">L</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="tue">M</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="wed">M</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="thu">J</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="fri">V</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="sat">S</button>
+                <button class="weekday-pill" type="button" data-action="toggle-recurring-day" data-day="sun">D</button>
+              </div>
+              <input name="recurringDays" type="hidden" />
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Pickup</p>
+              <h4>Pickup Information</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Nom</span>
+                <input name="pickupFirstName" placeholder="Pierre" />
+              </label>
+
+              <label class="field">
+                <span>Prenom</span>
+                <input name="pickupLastName" placeholder="Martin" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Pickup / Site</span>
+                <input name="pickupLabel" value="Paris Central Hub" required />
+              </label>
+
+              <label class="field field--wide">
+                <span>Address</span>
+                <input name="pickupStreet1" value="12 Rue du Depot" required />
+              </label>
+
+              <label class="field">
+                <span>City</span>
+                <input name="pickupCity" value="Paris" />
+              </label>
+
+              <label class="field">
+                <span>Postal Code</span>
+                <input name="pickupPostalCode" value="75011" />
+              </label>
+
+              <label class="field">
+                <span>Country</span>
+                <input name="pickupCountryCode" value="FR" />
+              </label>
+
+              <label class="field">
+                <span>Telephone</span>
+                <input name="pickupPhone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field">
+                <span>Email</span>
+                <input name="pickupEmail" type="email" placeholder="pickup@client.com" />
+              </label>
+
+              <label class="field">
+                <span>Parcel Size</span>
+                <select name="pickupParcelSize">
+                  <option value="S">S</option>
+                  <option value="M" selected>M</option>
+                  <option value="L">L</option>
+                  <option value="XL">XL</option>
+                  <option value="XXL">XXL</option>
+                  <option value="Palette">Palette</option>
+                </select>
+              </label>
+
+              <label class="field field--wide">
+                <span>Commentaires</span>
+                <textarea name="pickupComment" rows="2" placeholder="Code, reception, dock, contact note..."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Drop Off</p>
+              <div class="form-section__actions">
+                <h4>Dropoff Information</h4>
+                <button class="mini-button" type="button" data-action="add-recurring-drop">Add Drop</button>
+              </div>
+            </div>
+
+            <div class="dropoff-list" id="recurring-dropoff-list"></div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="recurring-route">Cancel</button>
+            <button class="solid-button" type="submit">Create Recurring Delivery</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="admin-pricing-modal">
+      <div class="modal__backdrop" data-close-modal="admin-pricing"></div>
+      <div class="modal__dialog">
+        <button class="modal__close" type="button" data-close-modal="admin-pricing">Close</button>
+        <div id="admin-pricing-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="optimizer-time-modal">
+      <div class="modal__backdrop" data-close-modal="optimizer-time"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="optimizer-time">Close</button>
+        <p class="eyebrow">VRP Setup</p>
+        <h3 id="optimizer-time-title">Choose Time</h3>
+        <p class="modal__subtitle">Pick the operating hour for this step.</p>
+
+        <form id="optimizer-time-form" class="stack">
+          <label class="field">
+            <span>Time</span>
+            <input id="optimizer-time-value" name="optimizerTimeValue" type="time" required />
+          </label>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="optimizer-time">Cancel</button>
+            <button class="solid-button" type="submit">Save Time</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="order-modal">
+      <div class="modal__backdrop" data-close-modal="order"></div>
+      <div class="modal__dialog">
+        <button class="modal__close" type="button" data-close-modal="order">Close</button>
+        <p class="eyebrow">Operations</p>
+        <h3>Create Order</h3>
+        <p class="modal__subtitle">This creates a real order in the API when the backend is running.</p>
+
+        <form id="order-form" class="stack">
+          <div class="form-grid">
+            <label class="field">
+              <span>Reference</span>
+              <input name="reference" placeholder="Auto-generate if empty" />
+            </label>
+
+            <label class="field">
+              <span>Flow</span>
+              <select name="kind">
+                <option value="delivery">Delivery</option>
+                <option value="pickup_delivery">Pickup + Delivery</option>
+                <option value="return">Return</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Merchant ID</span>
+              <input name="merchantId" value="merchant_demo" required />
+            </label>
+
+            <label class="field">
+              <span>Hub ID</span>
+              <input name="hubId" value="hub_paris_central" />
+            </label>
+
+            <label class="field">
+              <span>Pricing Algo</span>
+              <select name="pricingAlgorithmId">
+                <option value="basic">Basic Algo</option>
+                <option value="pallet">Palette</option>
+                <option value="hours">By Hours</option>
+                <option value="drops">By Drop</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Window Start</span>
+              <input name="timeWindowStart" type="datetime-local" />
+            </label>
+
+            <label class="field">
+              <span>Window End</span>
+              <input name="timeWindowEnd" type="datetime-local" />
+            </label>
+          </div>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Pickup</p>
+              <h4>Pickup Information</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Nom</span>
+                <input name="pickupFirstName" placeholder="Pierre" />
+              </label>
+
+              <label class="field">
+                <span>Prenom</span>
+                <input name="pickupLastName" placeholder="Martin" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Pickup / Site</span>
+                <input name="pickupLabel" value="Paris Central Hub" required />
+              </label>
+
+              <label class="field field--wide">
+                <span>Address</span>
+                <input name="pickupStreet1" value="12 Rue du Depot" required />
+              </label>
+
+              <label class="field">
+                <span>City</span>
+                <input name="pickupCity" value="Paris" />
+              </label>
+
+              <label class="field">
+                <span>Postal Code</span>
+                <input name="pickupPostalCode" value="75011" />
+              </label>
+
+              <label class="field">
+                <span>Country</span>
+                <input name="pickupCountryCode" value="FR" />
+              </label>
+
+              <label class="field">
+                <span>Telephone</span>
+                <input name="pickupPhone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field">
+                <span>Email</span>
+                <input name="pickupEmail" type="email" placeholder="pickup@client.com" />
+              </label>
+
+              <label class="field">
+                <span>Parcel Size</span>
+                <select name="pickupParcelSize">
+                  <option value="S">S</option>
+                  <option value="M" selected>M</option>
+                  <option value="L">L</option>
+                  <option value="XL">XL</option>
+                  <option value="XXL">XXL</option>
+                  <option value="Palette">Palette</option>
+                </select>
+              </label>
+
+              <label class="field field--wide">
+                <span>Commentaires</span>
+                <textarea name="pickupComment" rows="2" placeholder="Code, reception, dock, contact note..."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Drop Off</p>
+              <div class="form-section__actions">
+                <h4>Dropoff Information</h4>
+                <button class="mini-button" type="button" data-action="add-drop">Add Drop</button>
+              </div>
+            </div>
+
+            <div class="dropoff-list" id="dropoff-list"></div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="order">Cancel</button>
+            <button class="solid-button" type="submit">Create Order</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="driver-modal">
+      <div class="modal__backdrop" data-close-modal="driver"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="driver">Close</button>
+        <p class="eyebrow">Fleet</p>
+        <h3 id="driver-modal-title">Add Driver</h3>
+        <p class="modal__subtitle" id="driver-modal-subtitle">Create a driver profile for dispatch and route assignment.</p>
+
+        <form id="driver-form" class="stack">
+          <input name="driverId" type="hidden" />
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Driver</p>
+              <h4>Driver Identity</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Nom</span>
+                <input name="firstName" placeholder="Amina" required />
+              </label>
+
+              <label class="field">
+                <span>Prenom</span>
+                <input name="lastName" placeholder="Laurent" required />
+              </label>
+
+              <label class="field">
+                <span>Email</span>
+                <input name="email" type="email" placeholder="amina@carrier.com" />
+              </label>
+
+              <label class="field">
+                <span>Telephone</span>
+                <input name="phone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Tagg</span>
+                <input name="skills" placeholder="fragile, cold_chain, ev, bike" />
+              </label>
+
+              <label class="field">
+                <span>Type de vehicule</span>
+                <select name="vehicleType">
+                  <option value="bike">Bike</option>
+                  <option value="scooter">Scooter</option>
+                  <option value="car">Car</option>
+                  <option value="van_3m3" selected>3m3</option>
+                  <option value="van_5m3">5m3</option>
+                  <option value="van_10m3">10m3</option>
+                  <option value="van_15m3">15m3</option>
+                  <option value="van_20m3">20m3</option>
+                </select>
+              </label>
+
+              <label class="field field--wide">
+                <span>Photos du camion</span>
+                <input name="vehiclePhotos" type="file" accept="image/*" multiple />
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Carrier Company</p>
+                <h4>Legal Entity</h4>
+              </div>
+              <button class="subtle-button subtle-button--small" type="button" data-open-modal="carrier-company">Add Carrier Company</button>
+            </div>
+
+            <div class="form-grid">
+              <label class="field field--wide">
+                <span>Existing Carrier Company</span>
+                <select name="carrierCompanyId" id="carrier-company-select">
+                  <option value="">Independent driver / create new below</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Company Name</span>
+                <input name="carrierCompanyName" placeholder="Naaval Partners" />
+              </label>
+
+              <label class="field">
+                <span>Legal Name</span>
+                <input name="carrierCompanyLegalName" placeholder="Naaval Partners SAS" />
+              </label>
+
+              <label class="field">
+                <span>Company Email</span>
+                <input name="carrierCompanyEmail" type="email" placeholder="ops@naavalpartners.com" />
+              </label>
+
+              <label class="field">
+                <span>Company Phone</span>
+                <input name="carrierCompanyPhone" placeholder="+33100000000" />
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="driver">Cancel</button>
+            <button class="solid-button" id="driver-submit-button" type="submit">Create Driver</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="carrier-company-modal">
+      <div class="modal__backdrop" data-close-modal="carrier-company"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="carrier-company">Close</button>
+        <p class="eyebrow">Fleet</p>
+        <h3>Add Carrier Company</h3>
+        <p class="modal__subtitle">Create a carrier company once, then reuse it across multiple drivers.</p>
+
+        <form id="carrier-company-form" class="stack">
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Carrier Company</p>
+                <h4>Legal Entity</h4>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Company Name</span>
+                <input name="name" placeholder="Naaval Partners" required />
+              </label>
+
+              <label class="field">
+                <span>Legal Name</span>
+                <input name="legalName" placeholder="Naaval Partners SAS" />
+              </label>
+
+              <label class="field">
+                <span>Company Email</span>
+                <input name="email" type="email" placeholder="ops@naavalpartners.com" />
+              </label>
+
+              <label class="field">
+                <span>Company Phone</span>
+                <input name="phone" placeholder="+33100000000" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Headquarters Address</span>
+                <input name="headquartersAddress" placeholder="12 Rue Example, 75008 Paris" />
+              </label>
+
+              <label class="field">
+                <span>VAT Number</span>
+                <input name="vatNumber" placeholder="FR12345678901" />
+              </label>
+
+              <label class="field">
+                <span>Contact First Name</span>
+                <input name="contactFirstName" placeholder="Claire" />
+              </label>
+
+              <label class="field">
+                <span>Contact Last Name</span>
+                <input name="contactLastName" placeholder="Martin" />
+              </label>
+
+              <label class="field">
+                <span>Contact Phone</span>
+                <input name="contactPhone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field">
+                <span>Contact Email</span>
+                <input name="contactEmail" type="email" placeholder="ops@carrier.com" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Truck Tags</span>
+                <input name="tags" placeholder="EV, Frigo, BioEta" />
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="carrier-company">Cancel</button>
+            <button class="solid-button" type="submit">Create Carrier Company</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="quote-modal">
+      <div class="modal__backdrop" data-close-modal="quote"></div>
+      <div class="modal__dialog">
+        <button class="modal__close" type="button" data-close-modal="quote">Close</button>
+        <p class="eyebrow">Revenue</p>
+        <h3>Create Quote</h3>
+        <p class="modal__subtitle">Generate a PDF quote, then attach it to an existing customer account or create a new one automatically.</p>
+
+        <form id="quote-form" class="stack">
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Quote</p>
+              <h4>Commercial Context</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Pricing Model</span>
+                <input name="quoteSourceLabel" id="quote-source-label" readonly />
+              </label>
+
+              <label class="field">
+                <span>Estimated Price</span>
+                <input name="quoteAmountLabel" id="quote-amount-label" readonly />
+              </label>
+
+              <input name="quoteSource" id="quote-source" type="hidden" />
+              <input name="quoteAmount" id="quote-amount" type="hidden" />
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Company</p>
+              <h4>Company Information</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Company Name</span>
+                <input name="companyName" placeholder="Naaval Retail" required />
+              </label>
+
+              <label class="field">
+                <span>VAT Number</span>
+                <input name="vatNumber" placeholder="FR12345678901" />
+              </label>
+
+              <label class="field field--wide">
+                <span>Headquarters Address</span>
+                <input name="headquartersAddress" placeholder="12 Rue Example, 75008 Paris" required />
+              </label>
+
+              <label class="field">
+                <span>Phone</span>
+                <input name="companyPhone" placeholder="+33100000000" />
+              </label>
+
+              <label class="field">
+                <span>Email</span>
+                <input name="companyEmail" type="email" placeholder="finance@company.com" />
+              </label>
+
+              <label class="field">
+                <span>Revenue Range</span>
+                <select name="revenueRange">
+                  <option value="0-500k">0 - 500k EUR</option>
+                  <option value="500k-2m">500k - 2m EUR</option>
+                  <option value="2m-10m">2m - 10m EUR</option>
+                  <option value="10m-50m">10m - 50m EUR</option>
+                  <option value="50m+">50m+ EUR</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Company Size</span>
+                <select name="companySize">
+                  <option value="startup">Startup</option>
+                  <option value="smb" selected>SMB</option>
+                  <option value="mid_market">Mid-market</option>
+                  <option value="enterprise">Enterprise</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <p class="eyebrow">Contact</p>
+              <h4>Main Contact</h4>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>First Name</span>
+                <input name="contactFirstName" placeholder="Claire" required />
+              </label>
+
+              <label class="field">
+                <span>Last Name</span>
+                <input name="contactLastName" placeholder="Martin" required />
+              </label>
+
+              <label class="field">
+                <span>Phone</span>
+                <input name="contactPhone" placeholder="+33600000000" />
+              </label>
+
+              <label class="field">
+                <span>Email</span>
+                <input name="contactEmail" type="email" placeholder="claire@company.com" required />
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="quote">Cancel</button>
+            <button class="solid-button" type="submit">Generate Quote PDF</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="quote-email-modal">
+      <div class="modal__backdrop" data-close-modal="quote-email"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="quote-email">Close</button>
+        <p class="eyebrow">Revenue</p>
+        <h3>Send Quote Via Email</h3>
+        <p class="modal__subtitle">Prepare an email for the selected pricing algorithm and recipient.</p>
+
+        <form id="quote-email-form" class="stack">
+          <label class="field">
+            <span>Recipient Email</span>
+            <input name="recipientEmail" type="email" placeholder="contact@client.com" required />
+          </label>
+
+          <label class="field">
+            <span>Recipient Name</span>
+            <input name="recipientName" placeholder="Claire Martin" />
+          </label>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="quote-email">Cancel</button>
+            <button class="solid-button" type="submit">Send Email Draft</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+      <script type="module" src="./app.js"></script>
+    </div>
+  </body>
+</html>
