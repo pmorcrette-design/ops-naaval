@@ -18,6 +18,38 @@ const API_BASE_CANDIDATES = (() => {
   return [...new Set(candidates.filter(Boolean))];
 })();
 
+/**
+ * @typedef {Object} VrpDraftRow
+ * @property {string} id
+ * @property {number} rowNumber
+ * @property {"yes"|"no"} pickup
+ * @property {string} address
+ * @property {string} company
+ * @property {string} firstName
+ * @property {string} lastName
+ * @property {string} phone
+ * @property {string} email
+ * @property {string} comment
+ * @property {string} packageSize
+ * @property {string} parcelCount
+ * @property {string} weightKg
+ * @property {string} volumeDm3
+ * @property {string} timeWindowStart
+ * @property {string} timeWindowEnd
+ * @property {string} coldChain
+ * @property {string} fragile
+ * @property {string} returnFlag
+ * @property {string} referenceNumber
+ * @property {string} postalCode
+ * @property {string} city
+ * @property {string} countryCode
+ * @property {string} lat
+ * @property {string} lon
+ * @property {string} [pickupGroupId]
+ * @property {string} [linkedOrderId]
+ * @property {"csv"|"orders"} source
+ */
+
 const state = {
   activeView: "orders",
   apiAvailable: false,
@@ -42,8 +74,20 @@ const state = {
     updatedAt: null
   },
   graphhopperUsageLoading: false,
+  tenantContext: null,
+  modulesCatalog: {},
+  algorithmsCatalog: {},
+  plansCatalog: [],
+  tenants: [],
+  selectedTenantId: null,
   optimizerSetup: buildDefaultOptimizerSetup(),
   optimizerSpreadsheetHeaders: buildDefaultOptimizerSpreadsheetHeaders(),
+  optimizerDraftRows: [],
+  optimizerDraftSource: null,
+  optimizerDraftFileName: "",
+  optimizerDraftSummary: null,
+  optimizerDraftErrors: [],
+  optimizerRunLoading: false,
   optimizerTimeField: null,
   quoteContext: null,
   orders: [],
@@ -183,17 +227,29 @@ function buildDefaultOptimizerSetup() {
 
 function buildDefaultOptimizerSpreadsheetHeaders() {
   return {
-    lastName: "Name",
+    pickup: "Pickup",
+    referenceNumber: "Reference",
+    address: "Address",
+    company: "Company",
     firstName: "First Name",
-    companyName: "Company Name",
-    streetName: "Street Name",
-    postCode: "Post Code",
-    city: "City",
-    country: "Country",
+    lastName: "Last Name",
     phone: "Phone",
-    mail: "Mail",
-    parcelSize: "Parcel Size",
-    comment: "Comment"
+    email: "Email",
+    packageSize: "Package Size",
+    parcelCount: "Parcels",
+    weightKg: "Weight Kg",
+    volumeDm3: "Volume dm3",
+    timeWindowStart: "Window Start",
+    timeWindowEnd: "Window End",
+    coldChain: "Cold Chain",
+    fragile: "Fragile",
+    returnFlag: "Return",
+    comment: "Comment",
+    postalCode: "Postal Code",
+    city: "City",
+    countryCode: "Country",
+    lat: "Lat",
+    lon: "Lon"
   };
 }
 
@@ -223,6 +279,17 @@ const ADMIN_PRICING_ALGOS = [
     description: "Per-drop pricing with a minimum billed route volume."
   }
 ];
+
+const VIEW_MODULE_REQUIREMENTS = {
+  orders: "orders",
+  drivers: "drivers",
+  optimizer: "optimizer",
+  customers: "customers",
+  "recurring-routes": "recurring_routes",
+  pricing: "pricing",
+  inbox: "inbox",
+  admin: null
+};
 
 const AUTH_STORAGE_KEY = "naaval.ops.session";
 const RECURRING_DAY_OPTIONS = [
@@ -1093,13 +1160,17 @@ function labelForVehicleTypeId(vehicleTypeId) {
 
 function labelForOpsRole(role) {
   const labels = {
+    super_admin: "Super Admin",
+    naaval_admin: "Naaval Admin",
+    company_admin: "Company Admin",
+    company_user: "Company User",
     ops_admin: "Ops Admin",
     ops_manager: "Ops Manager",
     ops_dispatcher: "Dispatcher",
     ops_agent: "Ops Agent"
   };
 
-  return labels[role] ?? capitalize(role ?? "ops_agent");
+  return labels[role] ?? capitalize(role ?? "company_user");
 }
 
 function getAdminPricingAlgoMeta(algoId) {
@@ -1680,6 +1751,135 @@ function getVisibleOrders() {
   return state.orders.filter((order) => toDateKey(getOrderOperationalDate(order)) === state.selectedDate);
 }
 
+function shouldCollapseOrderIntoOperationalTour(order) {
+  return Boolean(order?.routeId && order?.pickupGroupId);
+}
+
+function summarizeOperationalTourDrops(dropoffAddresses) {
+  if (!Array.isArray(dropoffAddresses) || dropoffAddresses.length === 0) {
+    return "No drops";
+  }
+
+  if (dropoffAddresses.length === 1) {
+    return toAddressLabel(dropoffAddresses[0]);
+  }
+
+  const preview = dropoffAddresses
+    .slice(0, 2)
+    .map((address) => toAddressLabel(address))
+    .filter(Boolean)
+    .join(" • ");
+
+  return `${dropoffAddresses.length} drops${preview ? ` • ${preview}` : ""}${dropoffAddresses.length > 2 ? "…" : ""}`;
+}
+
+function buildOperationalTourOrder(route, groupedOrders) {
+  const firstOrder = groupedOrders[0];
+  const dropoffAddresses = groupedOrders.map((order) => clone(order.dropoffAddress)).filter(Boolean);
+  const totalRevenue = groupedOrders.reduce((total, order) => total + (order.amount ?? 0), 0);
+  const totalParcelCount = groupedOrders.reduce((total, order) => total + (order.totals?.parcelCount ?? order.parcelCount ?? 0), 0);
+  const totalWeightKg = groupedOrders.reduce((total, order) => total + (order.totals?.weightKg ?? order.weightKg ?? 0), 0);
+  const earliestWindowStart = groupedOrders
+    .map((order) => order.windowStart)
+    .filter(Boolean)
+    .sort()[0] ?? route?.stops?.[0]?.plannedArrivalAt ?? firstOrder.windowStart;
+  const latestWindowEnd = groupedOrders
+    .map((order) => order.windowEnd)
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] ?? firstOrder.windowEnd;
+
+  return {
+    ...firstOrder,
+    id: `tour_${route?.id ?? firstOrder.routeId}_${firstOrder.pickupGroupId ?? "group"}`,
+    isOperationalTour: true,
+    sourceOrderIds: groupedOrders.map((order) => order.id),
+    reference: `${formatOptimizerRouteLabel(route?.id ?? firstOrder.routeId)} Tour`,
+    kind: "tour",
+    windowStart: earliestWindowStart,
+    windowEnd: latestWindowEnd,
+    createdAt: firstOrder.createdAt,
+    updatedAt: route?.updatedAt ?? firstOrder.updatedAt,
+    pickupAddress: clone(firstOrder.pickupAddress),
+    dropoffAddress: clone(dropoffAddresses[0] ?? firstOrder.dropoffAddress),
+    dropoffAddresses,
+    dropoffLabel: summarizeOperationalTourDrops(dropoffAddresses),
+    notes: `${groupedOrders.length} optimized drop${groupedOrders.length > 1 ? "s" : ""} attached to the same pickup.`,
+    amount: totalRevenue,
+    totals: {
+      parcelCount: totalParcelCount,
+      weightKg: totalWeightKg,
+      revenue: totalRevenue
+    },
+    stops: clone(route?.stops ?? firstOrder.stops ?? []),
+    timeLabel: createTimeLabel(earliestWindowStart),
+    durationLabel: route ? `${Math.max(12, Math.round((route.totalDurationSeconds ?? 900) / 60))} min` : firstOrder.durationLabel,
+    routeStatus: route ? capitalize(route.status) : firstOrder.routeStatus,
+    routeId: route?.id ?? firstOrder.routeId,
+    routeState: route?.status ?? firstOrder.routeState,
+    livePosition: clone(firstOrder.livePosition ?? null),
+    livePositionAt: firstOrder.livePositionAt ?? null,
+    livePositionLabel: firstOrder.livePositionLabel ?? null,
+    sourceStatus: route?.status === "dispatched" ? "dispatched" : firstOrder.sourceStatus,
+    executionStatusCode: route?.status === "completed" ? "delivered" : firstOrder.executionStatusCode,
+    executionStatusTone: route?.status === "completed" ? "delivered" : firstOrder.executionStatusTone,
+    executionStatusLabel: route?.status === "completed" ? "Delivered" : firstOrder.executionStatusLabel,
+    status: route?.status === "completed" ? "delivered" : firstOrder.status,
+    statusProgressLabel: firstOrder.statusProgressLabel,
+    lastProofOutcomeCode: firstOrder.lastProofOutcomeCode,
+    lastProofOutcomeLabel: firstOrder.lastProofOutcomeLabel,
+    proofPhotoUrls: clone(firstOrder.proofPhotoUrls ?? []),
+    lastProofNote: firstOrder.lastProofNote,
+    lastProofDeliveredAt: firstOrder.lastProofDeliveredAt
+  };
+}
+
+function getRenderableOrders() {
+  const visibleOrders = getVisibleOrders()
+    .slice()
+    .sort((left, right) => new Date(getOrderOperationalDate(left)).getTime() - new Date(getOrderOperationalDate(right)).getTime());
+
+  const groupedByKey = new Map();
+  for (const order of visibleOrders) {
+    if (!shouldCollapseOrderIntoOperationalTour(order)) {
+      continue;
+    }
+    const key = `${order.routeId}::${order.pickupGroupId}`;
+    if (!groupedByKey.has(key)) {
+      groupedByKey.set(key, []);
+    }
+    groupedByKey.get(key).push(order);
+  }
+
+  const rendered = [];
+  const seenKeys = new Set();
+
+  for (const order of visibleOrders) {
+    if (!shouldCollapseOrderIntoOperationalTour(order)) {
+      rendered.push(order);
+      continue;
+    }
+
+    const key = `${order.routeId}::${order.pickupGroupId}`;
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    const route = state.routes.find((candidate) => candidate.id === order.routeId) ?? null;
+    const groupedOrders = groupedByKey.get(key) ?? [order];
+    rendered.push(buildOperationalTourOrder(route, groupedOrders));
+  }
+
+  return rendered;
+}
+
+function findRenderableOrderById(orderId) {
+  return getRenderableOrders().find(
+    (order) => order.id === orderId || Array.isArray(order.sourceOrderIds) && order.sourceOrderIds.includes(orderId)
+  );
+}
+
 function getVisibleRoutes() {
   const visibleOrderIds = new Set(getVisibleOrders().map((order) => order.id));
   return state.routes.filter((route) => route.stops?.some((stop) => getStopOrderIds(stop).some((orderId) => visibleOrderIds.has(orderId))));
@@ -2025,6 +2225,10 @@ function openModal(name) {
   if (name === "optimizer-time") {
     renderOptimizerTimeModal();
   }
+
+  if (name === "optimizer-validation") {
+    renderOptimizerValidationModal();
+  }
 }
 
 function setCustomerModalPresentation(editing = false) {
@@ -2243,6 +2447,57 @@ function restoreSession() {
   }
 }
 
+function isPlatformAdmin() {
+  return ["super_admin", "naaval_admin"].includes(String(state.currentUser?.role ?? "").trim());
+}
+
+function getAuthHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  if (state.currentUser?.token) {
+    headers.Authorization = `Bearer ${state.currentUser.token}`;
+  }
+  return headers;
+}
+
+function getTenantModules() {
+  return state.tenantContext?.modules ?? null;
+}
+
+function isModuleEnabled(moduleId) {
+  if (isPlatformAdmin()) {
+    return true;
+  }
+  const modules = getTenantModules();
+  if (!modules) {
+    return true;
+  }
+  return modules.includes(moduleId);
+}
+
+function applyAuthenticatedSession(sessionPayload) {
+  state.isAuthenticated = true;
+  state.currentUser = {
+    token: sessionPayload.token,
+    id: sessionPayload.userId || sessionPayload.customerId || sessionPayload.driverId || createId("session"),
+    userId: sessionPayload.userId || null,
+    customerId: sessionPayload.customerId || null,
+    driverId: sessionPayload.driverId || null,
+    tenantId: sessionPayload.tenantId || null,
+    companyId: sessionPayload.companyId || null,
+    role: sessionPayload.role || "company_user",
+    actorType: sessionPayload.actorType || "ops_user",
+    firstName: sessionPayload.firstName || "",
+    lastName: sessionPayload.lastName || "",
+    name: sessionPayload.name || joinNameParts(sessionPayload.firstName, sessionPayload.lastName) || "Ops User",
+    email: sessionPayload.email,
+    source: sessionPayload.source || "password",
+    tenant: sessionPayload.tenant || null
+  };
+  state.tenantContext = sessionPayload.tenantContext || null;
+  persistSession(state.currentUser);
+  updateAuthUi();
+}
+
 function updateAuthUi() {
   const gate = document.querySelector("#login-gate");
   if (!gate) {
@@ -2274,6 +2529,21 @@ function decodeJwtPayload(token) {
 function findOpsUserByEmail(email) {
   const normalized = String(email ?? "").trim().toLowerCase();
   return state.opsUsers.find((user) => String(user.email ?? "").trim().toLowerCase() === normalized) ?? null;
+}
+
+function isTrustedOpsDomainEmail(email) {
+  const normalized = String(email ?? "").trim().toLowerCase();
+  return ["@naaval.app", "@naaval.eu", "@naaval.fr"].some((suffix) => normalized.endsWith(suffix));
+}
+
+function triggerRenderedGoogleButton() {
+  const slot = document.querySelector("#google-login-slot");
+  const button = slot?.querySelector('[role="button"]');
+  if (button instanceof HTMLElement) {
+    button.click();
+    return true;
+  }
+  return false;
 }
 
 function setupGoogleIdentity(retryCount = 0) {
@@ -2330,43 +2600,47 @@ function handleGoogleCredentialResponse(response) {
     return;
   }
 
-  const matchingUser = findOpsUserByEmail(payload.email);
-  if (!matchingUser && !payload.email.endsWith("@naaval.app")) {
-    showToast("This Google account is not registered as an ops user yet.", "error");
-    return;
-  }
-
-  loginWithProfile(
-    matchingUser ?? {
-      id: payload.sub ?? "ops_google_live",
-      firstName: payload.given_name ?? "Google",
-      lastName: payload.family_name ?? "User",
-      name: payload.name,
-      email: payload.email
-    },
-    "google"
-  );
-  showToast(`Google login successful for ${payload.email}.`);
+  void (async () => {
+    try {
+      const session = await postJson("/auth/google-ops", { email: payload.email });
+      applyAuthenticatedSession(session);
+      await refreshData();
+      showToast(`Google login successful for ${payload.email}.`);
+    } catch (error) {
+      if (!isTrustedOpsDomainEmail(payload.email)) {
+        showToast(error.message || "This Google account is not registered as an ops user yet.", "error");
+        return;
+      }
+      showToast(error.message || "Google login failed.", "error");
+    }
+  })();
 }
 
 function loginWithProfile(profile, source = "password") {
-  state.isAuthenticated = true;
-  state.currentUser = {
-    id: profile.id ?? createId("session"),
+  applyAuthenticatedSession({
+    token: profile.token,
+    userId: profile.id,
+    tenantId: profile.tenantId,
+    companyId: profile.companyId,
+    role: profile.role,
+    actorType: profile.actorType || "ops_user",
     firstName: profile.firstName ?? "",
     lastName: profile.lastName ?? "",
     name: profile.name ?? joinNameParts(profile.firstName, profile.lastName) ?? "Ops User",
     email: profile.email,
-    source
-  };
-  persistSession(state.currentUser);
-  updateAuthUi();
+    source,
+    tenant: profile.tenant ?? null,
+    tenantContext: profile.tenantContext ?? state.tenantContext
+  });
   render();
 }
 
 function logout() {
   state.isAuthenticated = false;
   state.currentUser = null;
+  state.tenantContext = null;
+  state.tenants = [];
+  state.selectedTenantId = null;
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
   window.google?.accounts?.id?.disableAutoSelect?.();
   updateAuthUi();
@@ -2379,7 +2653,9 @@ async function fetchJson(path) {
 
   for (const baseUrl of API_BASE_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`);
+      const response = await fetch(`${baseUrl}${path}`, {
+        headers: getAuthHeaders()
+      });
 
       if (!response.ok) {
         const message = await readErrorMessage(response);
@@ -2434,9 +2710,9 @@ async function postJson(path, payload) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: "POST",
-        headers: {
+        headers: getAuthHeaders({
           "Content-Type": "application/json"
-        },
+        }),
         body: JSON.stringify(payload)
       });
 
@@ -2468,9 +2744,9 @@ async function patchJson(path, payload) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: "PATCH",
-        headers: {
+        headers: getAuthHeaders({
           "Content-Type": "application/json"
-        },
+        }),
         body: JSON.stringify(payload)
       });
 
@@ -2501,7 +2777,8 @@ async function deleteJson(path) {
   for (const baseUrl of candidates) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -2604,6 +2881,10 @@ function mapDomainData(db) {
       windowEnd: primaryWindow?.end ?? null,
       createdAt: order.createdAt ?? null,
       updatedAt: order.updatedAt ?? null,
+      source: order.source ?? null,
+      sourceLabel: order.sourceLabel ?? null,
+      pickupGroupId: order.pickupGroupId ?? null,
+      sourceBatchId: order.sourceBatchId ?? null,
       sourceStatus: order.status,
       executionStatusCode: order.status ?? progress.visualStatus,
       executionStatusTone: toneForStatus(order.status ?? progress.visualStatus),
@@ -2725,6 +3006,9 @@ function getDefaultHubId() {
 }
 
 async function loadFromApi() {
+  const tenantContextResponse = await fetchJson("/tenant/context");
+  const tenantContext = tenantContextResponse.tenantContext ?? null;
+  const tenantListResponse = isPlatformAdmin() ? await fetchJson("/admin/tenants").catch(() => ({ items: [] })) : { items: [] };
   const [
     ordersResponse,
     routesResponse,
@@ -2776,6 +3060,15 @@ async function loadFromApi() {
   });
 
   state.pricingConfig = clone(pricingResponse.config ?? buildDefaultPricingConfig());
+  state.tenantContext = clone(tenantContext);
+  state.modulesCatalog = clone(tenantContextResponse.modulesCatalog ?? {});
+  state.algorithmsCatalog = clone(tenantContextResponse.algorithmsCatalog ?? {});
+  state.plansCatalog = clone(tenantContextResponse.plansCatalog ?? []);
+  state.tenants = clone(tenantListResponse.items ?? []);
+  state.selectedTenantId =
+    state.selectedTenantId && state.tenants.some((tenant) => tenant.id === state.selectedTenantId)
+      ? state.selectedTenantId
+      : state.tenants[0]?.id ?? null;
   ensurePricingState();
   state.apiAvailable = true;
   state.dataMode = state.apiBaseUrl.includes(":8787") ? "Integrated Local Server" : "Live API";
@@ -2797,6 +3090,7 @@ function loadFromLocal() {
 
 function ensureSelections() {
   const visibleOrders = getVisibleOrders();
+  const renderableOrders = getRenderableOrders();
   const visibleCustomers = getVisibleCustomers();
   const visibleRecurringRoutes = getVisibleRecurringRoutes();
   const visibleRoutes = getVisibleRoutes();
@@ -2807,8 +3101,8 @@ function ensureSelections() {
 
   state.selectedPlanningOrderIds = state.selectedPlanningOrderIds.filter((orderId) => visibleOrderIds.has(orderId));
 
-  if (!visibleOrders.some((order) => order.id === state.selectedOrderId)) {
-    state.selectedOrderId = visibleOrders[0]?.id ?? state.orders[0]?.id ?? null;
+  if (!renderableOrders.some((order) => order.id === state.selectedOrderId || order.sourceOrderIds?.includes?.(state.selectedOrderId))) {
+    state.selectedOrderId = renderableOrders[0]?.id ?? state.orders[0]?.id ?? null;
   }
 
   if (!state.drivers.some((driver) => driver.id === state.selectedDriverId)) {
@@ -2836,6 +3130,9 @@ function ensureSelections() {
   if (!opsUsers.some((user) => user.id === state.selectedOpsUserId)) {
     state.selectedOpsUserId = opsUsers[0]?.id ?? null;
   }
+  if (!state.tenants.some((tenant) => tenant.id === state.selectedTenantId)) {
+    state.selectedTenantId = state.tenants[0]?.id ?? null;
+  }
   if (!opsUsers.some((user) => user.id === state.editingOpsUserId)) {
     state.editingOpsUserId = null;
   }
@@ -2846,12 +3143,29 @@ function ensureSelections() {
 }
 
 async function refreshData(showMessage = false) {
+  if (!state.isAuthenticated) {
+    state.apiAvailable = false;
+    state.tenantContext = null;
+    state.modulesCatalog = {};
+    state.algorithmsCatalog = {};
+    state.plansCatalog = [];
+    state.tenants = [];
+    updateAuthUi();
+    render();
+    return;
+  }
+
   try {
     await loadFromApi();
     if (showMessage) {
       showToast("Data refreshed from core-api.");
     }
-  } catch (_error) {
+  } catch (error) {
+    if (String(error?.message || "").toLowerCase().includes("authentication") || String(error?.message || "").toLowerCase().includes("unauthorized")) {
+      logout();
+      showToast("Your session expired. Please log in again.", "error");
+      return;
+    }
     loadFromLocal();
     if (showMessage) {
       showToast("API unavailable. Using local prototype data instead.", "error");
@@ -3122,7 +3436,14 @@ function syncFormDefaults() {
 
 function renderNav() {
   for (const button of document.querySelectorAll("[data-view]")) {
-    button.classList.toggle("nav__item--active", button.getAttribute("data-view") === state.activeView);
+    const view = button.getAttribute("data-view");
+    const moduleId = VIEW_MODULE_REQUIREMENTS[view];
+    const canSeeView =
+      view === "admin"
+        ? state.currentUser?.actorType === "ops_user" && String(state.currentUser?.role ?? "") !== "company_user"
+        : !moduleId || isModuleEnabled(moduleId);
+    button.classList.toggle("hidden", !canSeeView);
+    button.classList.toggle("nav__item--active", canSeeView && view === state.activeView);
   }
 }
 
@@ -3332,7 +3653,7 @@ function getAssignableDriversForOrder(order) {
 }
 
 function renderDriverAssignmentControl(order, context = "list") {
-  const assignable = canAssignOrder(order);
+  const assignable = !order.isOperationalTour && canAssignOrder(order);
   const carrierCompanies = getCarrierCompanyChoices();
   const selectedCarrierCompanyId = getSelectedCarrierCompanyIdForOrder(order);
   const assignableDrivers = getAssignableDriversForOrder(order);
@@ -3393,10 +3714,38 @@ function renderAddressSnapshot(title, address) {
   `;
 }
 
+function renderDropoffSnapshots(order) {
+  if (Array.isArray(order.dropoffAddresses) && order.dropoffAddresses.length > 1) {
+    return `
+      <section class="detail-section">
+        <h4>Dropoff Details</h4>
+        <div class="detail-multi-addresses">
+          ${order.dropoffAddresses
+            .map(
+              (address, index) => `
+                <div class="detail-multi-addresses__card">
+                  <strong>Drop ${index + 1}</strong>
+                  <span>${escapeHtml(toAddressLabel(address))}</span>
+                  <span>${escapeHtml(address?.contactName ?? "Not provided")}</span>
+                  <span>${escapeHtml(address?.phone ?? "Not provided")}</span>
+                  <span>${escapeHtml(address?.comment ?? "No comment")}</span>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  return renderAddressSnapshot("Dropoff Details", order.dropoffAddress);
+}
+
 function renderOrdersView() {
   const visibleOrders = getVisibleOrders()
     .slice()
     .sort((left, right) => new Date(getOrderOperationalDate(left)).getTime() - new Date(getOrderOperationalDate(right)).getTime());
+  const renderableOrders = getRenderableOrders();
   const selectableOrders = visibleOrders.filter((order) => canOrderBePlanned(order));
   const selectedCount = getSelectedPlanningOrders().filter((order) => canOrderBePlanned(order)).length;
 
@@ -3414,8 +3763,8 @@ function renderOrdersView() {
         </div>
       </div>
       <div class="orders-list">
-        ${visibleOrders.length > 0
-          ? visibleOrders
+        ${renderableOrders.length > 0
+          ? renderableOrders
           .map(
             (order) => `
               <article class="order-row ${order.id === state.selectedOrderId ? "order-row--active" : ""}">
@@ -3424,7 +3773,7 @@ function renderOrdersView() {
                     type="checkbox"
                     data-planning-order-checkbox="${order.id}"
                     ${isOrderSelectedForPlanning(order.id) ? "checked" : ""}
-                    ${!canOrderBePlanned(order) ? "disabled" : ""}
+                    ${order.isOperationalTour || !canOrderBePlanned(order) ? "disabled" : ""}
                   />
                 </label>
                 <button class="order-row__content" type="button" data-action="open-order-detail" data-order-id="${order.id}">
@@ -3444,7 +3793,7 @@ function renderOrdersView() {
                       <span class="address-line__text">${escapeHtml(order.pickupLabel)}</span>
                     </span>
                     <span class="address-line">
-                      <span class="address-line__icon">DO</span>
+                      <span class="address-line__icon">${order.isOperationalTour ? "ST" : "DO"}</span>
                       <span class="address-line__text">${escapeHtml(order.dropoffLabel)}</span>
                     </span>
                   </span>
@@ -3478,7 +3827,7 @@ function renderOrderDetail(order) {
     <article class="detail-card">
       <header class="detail-card__header">
         <div>
-          <p class="eyebrow">Order ${escapeHtml(order.reference)}</p>
+          <p class="eyebrow">${escapeHtml(order.isOperationalTour ? "Operational Tour" : `Order ${order.reference}`)}</p>
           <h3>${escapeHtml(order.dropoffLabel)}</h3>
         </div>
         ${renderOrderExecutionStatus(order)}
@@ -3500,7 +3849,7 @@ function renderOrderDetail(order) {
 
         <section class="detail-section">
           <h4>Route Map</h4>
-          ${buildMapEmbed([order.pickupAddress, order.dropoffAddress], `${order.reference} route map`, {
+          ${buildMapEmbed([order.pickupAddress, ...(order.dropoffAddresses ?? [order.dropoffAddress])], `${order.reference} route map`, {
             livePosition: order.livePosition,
             liveLabel: order.courier === "Unassigned" ? "Driver live" : `${order.courier} live`
           })}
@@ -3564,7 +3913,7 @@ function renderOrderDetail(order) {
         </section>
 
         ${renderAddressSnapshot("Pickup Details", order.pickupAddress)}
-        ${renderAddressSnapshot("Dropoff Details", order.dropoffAddress)}
+        ${renderDropoffSnapshots(order)}
       </div>
     </article>
   `;
@@ -3576,7 +3925,7 @@ function renderOrderDetailModal() {
     return;
   }
 
-  const selectedOrder = state.orders.find((order) => order.id === state.selectedOrderId);
+  const selectedOrder = findRenderableOrderById(state.selectedOrderId);
 
   content.innerHTML = selectedOrder
     ? `
@@ -4195,10 +4544,10 @@ function renderRecurringRouteDetailModal() {
 function renderOptimizerStageTabs() {
   const stages = [
     { id: "history", index: "00", label: "History", hint: "Compare routings" },
-    { id: "setup", index: "01", label: "Setup", hint: "Configure wave" },
-    { id: "orders", index: "02", label: "Orders", hint: "Review demand" },
-    { id: "map", index: "03", label: "Map", hint: "Inspect clusters" },
-    { id: "routes", index: "04", label: "Routes", hint: "Dispatch draft" }
+    { id: "setup", index: "01", label: "Import", hint: "CSV or My Orders" },
+    { id: "orders", index: "02", label: "Validate", hint: "Review pickups and drops" },
+    { id: "map", index: "03", label: "Results", hint: "Inspect optimized split" },
+    { id: "routes", index: "04", label: "Routes", hint: "Dispatch operational tour" }
   ];
 
   return `
@@ -4328,12 +4677,14 @@ function getPlanningJobStats(plan) {
   const revenue = orders.reduce((sum, order) => sum + (Number(order.amount) || 0), 0);
   const driverCount = new Set(routes.map((route) => route.driverId).filter(Boolean)).size;
   const stopCount = routes.reduce((sum, route) => sum + (route.stops?.length ?? 0), 0);
+  const unassignedCount = (plan?.unassignedJobIds ?? []).length;
 
   return {
     routes,
     orders,
     driverCount,
     stopCount,
+    unassignedCount,
     routeCount: routes.length,
     orderCount: orders.length,
     totalDistanceKm: Math.max(0, Math.round(totalDistanceMeters / 1000)),
@@ -4381,6 +4732,302 @@ function updateOptimizerSetupField(field, value) {
   }
 
   state.optimizerSetup[field] = value;
+}
+
+function getOptimizerDraftRows() {
+  return state.optimizerDraftRows ?? [];
+}
+
+function resetOptimizerDraftState() {
+  state.optimizerDraftRows = [];
+  state.optimizerDraftSource = null;
+  state.optimizerDraftFileName = "";
+  state.optimizerDraftSummary = null;
+  state.optimizerDraftErrors = [];
+}
+
+function setOptimizerDraftRows(rows, source = "csv", fileName = "") {
+  state.optimizerDraftRows = rows;
+  state.optimizerDraftSource = source;
+  state.optimizerDraftFileName = fileName;
+  state.optimizerDraftSummary = summarizeOptimizerDraftRows(rows);
+  state.optimizerDraftErrors = getOptimizerDraftValidationReport(rows).errors;
+}
+
+function toDraftString(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizePickupCellValue(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["yes", "y", "true", "1", "pickup"].includes(normalized)) {
+    return "yes";
+  }
+
+  if (["", "no", "n", "false", "0", "drop", "delivery"].includes(normalized)) {
+    return "no";
+  }
+
+  return null;
+}
+
+function addressIdentityKey(address) {
+  if (!address) {
+    return "";
+  }
+
+  const coordinates = address.coordinates || {};
+  if (Number.isFinite(coordinates.lat) && Number.isFinite(coordinates.lon)) {
+    return `${coordinates.lat.toFixed(6)}:${coordinates.lon.toFixed(6)}`;
+  }
+
+  return [
+    address.street1 ?? "",
+    address.postalCode ?? "",
+    address.city ?? "",
+    address.countryCode ?? ""
+  ]
+    .map((value) => String(value).trim().toLowerCase())
+    .join("|");
+}
+
+function composeDraftAddressLabel(address) {
+  if (!address) {
+    return "";
+  }
+
+  const pieces = [address.street1, address.postalCode, address.city, address.countryCode]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  return pieces.join(", ");
+}
+
+function createDraftRow(overrides = {}) {
+  return {
+    id: overrides.id || createId("vrp_row"),
+    rowNumber: overrides.rowNumber ?? 0,
+    pickup: overrides.pickup ?? "no",
+    address: overrides.address ?? "",
+    company: overrides.company ?? "",
+    firstName: overrides.firstName ?? "",
+    lastName: overrides.lastName ?? "",
+    phone: overrides.phone ?? "",
+    email: overrides.email ?? "",
+    comment: overrides.comment ?? "",
+    packageSize: overrides.packageSize ?? "M",
+    parcelCount: overrides.parcelCount ?? "1",
+    weightKg: overrides.weightKg ?? "",
+    volumeDm3: overrides.volumeDm3 ?? "",
+    timeWindowStart: overrides.timeWindowStart ?? "",
+    timeWindowEnd: overrides.timeWindowEnd ?? "",
+    coldChain: overrides.coldChain ?? "no",
+    fragile: overrides.fragile ?? "no",
+    returnFlag: overrides.returnFlag ?? "no",
+    referenceNumber: overrides.referenceNumber ?? "",
+    postalCode: overrides.postalCode ?? "",
+    city: overrides.city ?? "",
+    countryCode: overrides.countryCode ?? "FR",
+    lat: overrides.lat ?? "",
+    lon: overrides.lon ?? "",
+    pickupGroupId: overrides.pickupGroupId ?? "",
+    linkedOrderId: overrides.linkedOrderId ?? "",
+    source: overrides.source ?? "csv"
+  };
+}
+
+function buildOptimizerDraftRowsFromSelectedOrders(orders) {
+  const groups = new Map();
+
+  for (const order of orders) {
+    const key = addressIdentityKey(order.pickupAddress) || `fallback:${order.id}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        pickupAddress: order.pickupAddress,
+        merchantId: order.merchantId,
+        pickupGroupId: order.id,
+        orders: []
+      });
+    }
+
+    groups.get(key).orders.push(order);
+  }
+
+  let rowNumber = 2;
+  const rows = [];
+
+  for (const group of groups.values()) {
+    rows.push(
+      createDraftRow({
+        rowNumber,
+        pickup: "yes",
+        address: composeDraftAddressLabel(group.pickupAddress),
+        company: group.merchantId ?? "",
+        firstName: splitContactName(group.pickupAddress?.contactName ?? "").firstName,
+        lastName: splitContactName(group.pickupAddress?.contactName ?? "").lastName,
+        phone: group.pickupAddress?.phone ?? "",
+        email: group.pickupAddress?.email ?? "",
+        comment: group.pickupAddress?.comment ?? "",
+        packageSize: group.pickupAddress?.parcelSize ?? "M",
+        postalCode: group.pickupAddress?.postalCode ?? "",
+        city: group.pickupAddress?.city ?? "",
+        countryCode: group.pickupAddress?.countryCode ?? "FR",
+        lat: group.pickupAddress?.coordinates?.lat !== undefined ? String(group.pickupAddress.coordinates.lat) : "",
+        lon: group.pickupAddress?.coordinates?.lon !== undefined ? String(group.pickupAddress.coordinates.lon) : "",
+        pickupGroupId: group.pickupGroupId,
+        source: "orders"
+      })
+    );
+    rowNumber += 1;
+
+    for (const order of group.orders) {
+      const dropContact = splitContactName(order.dropoffAddress?.contactName ?? "");
+      rows.push(
+        createDraftRow({
+          rowNumber,
+          pickup: "no",
+          address: composeDraftAddressLabel(order.dropoffAddress),
+          company: order.merchantId ?? "",
+          firstName: dropContact.firstName,
+          lastName: dropContact.lastName,
+          phone: order.dropoffAddress?.phone ?? "",
+          email: order.dropoffAddress?.email ?? "",
+          comment: order.notes ?? order.dropoffAddress?.comment ?? "",
+          packageSize: order.parcelSize ?? order.dropoffAddress?.parcelSize ?? "M",
+          parcelCount: String(order.parcelCount ?? 1),
+          weightKg: order.weightKg ? String(order.weightKg) : "",
+          volumeDm3: order.volumeDm3 ? String(order.volumeDm3) : "",
+          timeWindowStart: order.windowStart ? order.windowStart.slice(0, 16) : "",
+          timeWindowEnd: order.windowEnd ? order.windowEnd.slice(0, 16) : "",
+          coldChain: (order.requiredSkills ?? []).includes("cold_chain") ? "yes" : "no",
+          returnFlag: order.kind === "return" ? "yes" : "no",
+          referenceNumber: order.reference ?? "",
+          postalCode: order.dropoffAddress?.postalCode ?? "",
+          city: order.dropoffAddress?.city ?? "",
+          countryCode: order.dropoffAddress?.countryCode ?? "FR",
+          lat: order.dropoffCoordinates?.lat !== undefined ? String(order.dropoffCoordinates.lat) : "",
+          lon: order.dropoffCoordinates?.lon !== undefined ? String(order.dropoffCoordinates.lon) : "",
+          pickupGroupId: group.pickupGroupId,
+          linkedOrderId: order.id,
+          source: "orders"
+        })
+      );
+      rowNumber += 1;
+    }
+  }
+
+  return rows;
+}
+
+function summarizeOptimizerDraftRows(rows) {
+  const pickupRows = rows.filter((row) => normalizePickupCellValue(row.pickup) === "yes");
+  const dropRows = rows.filter((row) => normalizePickupCellValue(row.pickup) === "no");
+  const uniqueGroups = new Set(dropRows.map((row) => row.pickupGroupId || row.id));
+
+  return {
+    totalRows: rows.length,
+    pickupCount: pickupRows.length,
+    dropCount: dropRows.length,
+    groupCount: uniqueGroups.size || pickupRows.length,
+    sourceLabel:
+      state.optimizerDraftSource === "orders"
+        ? "My Orders selection"
+        : state.optimizerDraftSource === "csv"
+          ? "CSV import"
+          : "VRP draft"
+  };
+}
+
+function getOptimizerDraftColumns() {
+  return [
+    { id: "pickup", fallbackLabel: "Pickup" },
+    { id: "referenceNumber", fallbackLabel: "Reference" },
+    { id: "address", fallbackLabel: "Address" },
+    { id: "company", fallbackLabel: "Company" },
+    { id: "firstName", fallbackLabel: "First Name" },
+    { id: "lastName", fallbackLabel: "Last Name" },
+    { id: "phone", fallbackLabel: "Phone" },
+    { id: "email", fallbackLabel: "Email" },
+    { id: "packageSize", fallbackLabel: "Package Size" },
+    { id: "parcelCount", fallbackLabel: "Parcels" },
+    { id: "weightKg", fallbackLabel: "Weight Kg" },
+    { id: "volumeDm3", fallbackLabel: "Volume dm3" },
+    { id: "timeWindowStart", fallbackLabel: "Window Start" },
+    { id: "timeWindowEnd", fallbackLabel: "Window End" },
+    { id: "coldChain", fallbackLabel: "Cold Chain" },
+    { id: "fragile", fallbackLabel: "Fragile" },
+    { id: "returnFlag", fallbackLabel: "Return" },
+    { id: "comment", fallbackLabel: "Comment" },
+    { id: "postalCode", fallbackLabel: "Postal Code" },
+    { id: "city", fallbackLabel: "City" },
+    { id: "countryCode", fallbackLabel: "Country" },
+    { id: "lat", fallbackLabel: "Lat" },
+    { id: "lon", fallbackLabel: "Lon" }
+  ];
+}
+
+function updateOptimizerDraftRowCell(rowId, columnId, rawValue) {
+  state.optimizerDraftRows = getOptimizerDraftRows().map((row) =>
+    row.id === rowId
+      ? {
+          ...row,
+          [columnId]: String(rawValue ?? "")
+        }
+      : row
+  );
+  state.optimizerDraftSummary = summarizeOptimizerDraftRows(state.optimizerDraftRows);
+  state.optimizerDraftErrors = getOptimizerDraftValidationReport(state.optimizerDraftRows).errors;
+}
+
+function getOptimizerDraftValidationReport(rows) {
+  const errors = [];
+  let hasPickupContext = Boolean(String(state.optimizerSetup?.pickupAddress || "").trim());
+
+  for (const row of rows) {
+    const pickupFlag = normalizePickupCellValue(row.pickup);
+    if (!pickupFlag) {
+      errors.push({ rowId: row.id, rowNumber: row.rowNumber, message: "pickup must be yes or no" });
+      continue;
+    }
+
+    if (!toDraftString(row.address)) {
+      errors.push({
+        rowId: row.id,
+        rowNumber: row.rowNumber,
+        message: pickupFlag === "yes" ? "pickup rows need an address" : "drop rows need an address"
+      });
+    }
+
+    if (pickupFlag === "yes") {
+      hasPickupContext = true;
+      continue;
+    }
+
+    if (!hasPickupContext) {
+      errors.push({
+        rowId: row.id,
+        rowNumber: row.rowNumber,
+        message: "drop rows need a pickup above them, or a default pickup address in the setup"
+      });
+    }
+
+    if (row.timeWindowStart && row.timeWindowEnd) {
+      const start = Date.parse(row.timeWindowStart);
+      const end = Date.parse(row.timeWindowEnd);
+      if (!Number.isNaN(start) && !Number.isNaN(end) && end < start) {
+        errors.push({
+          rowId: row.id,
+          rowNumber: row.rowNumber,
+          message: "timeWindowEnd must be after timeWindowStart"
+        });
+      }
+    }
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
 }
 
 function renderOptimizerOrdersTable(orders, emptyCopy) {
@@ -4442,102 +5089,11 @@ function renderOptimizerOrdersTable(orders, emptyCopy) {
 }
 
 function getOptimizerSpreadsheetColumns() {
-  return [
-    { id: "lastName", fallbackLabel: "Name" },
-    { id: "firstName", fallbackLabel: "First Name" },
-    { id: "companyName", fallbackLabel: "Company Name" },
-    { id: "streetName", fallbackLabel: "Street Name" },
-    { id: "postCode", fallbackLabel: "Post Code" },
-    { id: "city", fallbackLabel: "City" },
-    { id: "country", fallbackLabel: "Country" },
-    { id: "phone", fallbackLabel: "Phone" },
-    { id: "mail", fallbackLabel: "Mail" },
-    { id: "parcelSize", fallbackLabel: "Parcel Size" },
-    { id: "comment", fallbackLabel: "Comment" }
-  ];
+  return getOptimizerDraftColumns();
 }
 
-function getOptimizerSpreadsheetCellValue(order, columnId) {
-  const contact = splitContactName(order.dropoffAddress?.contactName ?? order.pickupAddress?.contactName ?? "");
-  switch (columnId) {
-    case "lastName":
-      return contact.lastName || "";
-    case "firstName":
-      return contact.firstName || "";
-    case "companyName":
-      return order.dropoffLabel || order.dropoffAddress?.label || order.merchantId || "";
-    case "streetName":
-      return order.dropoffAddress?.street1 || "";
-    case "postCode":
-      return order.dropoffAddress?.postalCode || "";
-    case "city":
-      return order.dropoffAddress?.city || "";
-    case "country":
-      return order.dropoffAddress?.countryCode || "";
-    case "phone":
-      return order.dropoffAddress?.phone || "";
-    case "mail":
-      return order.dropoffAddress?.email || "";
-    case "parcelSize":
-      return order.parcelSize || "M";
-    case "comment":
-      return order.notes || order.dropoffAddress?.comment || "";
-    default:
-      return "";
-  }
-}
-
-function buildUpdatedOrderFromSpreadsheetCell(order, columnId, rawValue) {
-  const value = String(rawValue ?? "").trim();
-  const updatedOrder = clone(order);
-  updatedOrder.dropoffAddress = clone(order.dropoffAddress ?? {});
-  updatedOrder.pickupAddress = clone(order.pickupAddress ?? {});
-
-  const currentContact = splitContactName(updatedOrder.dropoffAddress?.contactName ?? updatedOrder.pickupAddress?.contactName ?? "");
-  const firstName = columnId === "firstName" ? value : currentContact.firstName || "";
-  const lastName = columnId === "lastName" ? value : currentContact.lastName || "";
-  const contactName = [firstName, lastName].filter(Boolean).join(" ").trim();
-
-  switch (columnId) {
-    case "firstName":
-    case "lastName":
-      updatedOrder.dropoffAddress.contactName = contactName;
-      break;
-    case "companyName":
-      updatedOrder.dropoffLabel = value;
-      updatedOrder.dropoffAddress.label = value;
-      break;
-    case "streetName":
-      updatedOrder.dropoffAddress.street1 = value;
-      break;
-    case "postCode":
-      updatedOrder.dropoffAddress.postalCode = value;
-      break;
-    case "city":
-      updatedOrder.dropoffAddress.city = value;
-      break;
-    case "country":
-      updatedOrder.dropoffAddress.countryCode = value || "FR";
-      break;
-    case "phone":
-      updatedOrder.dropoffAddress.phone = value;
-      break;
-    case "mail":
-      updatedOrder.dropoffAddress.email = value;
-      break;
-    case "parcelSize":
-      updatedOrder.parcelSize = value || "M";
-      updatedOrder.dropoffAddress.parcelSize = value || "M";
-      break;
-    case "comment":
-      updatedOrder.notes = value;
-      updatedOrder.dropoffAddress.comment = value;
-      break;
-    default:
-      break;
-  }
-
-  return updatedOrder;
+function getOptimizerSpreadsheetCellValue(row, columnId) {
+  return String(row?.[columnId] ?? "");
 }
 
 function mergeOrderForUi(previousOrder, savedOrder) {
@@ -4563,34 +5119,65 @@ function replaceOrderInState(savedOrder) {
   }
 }
 
-async function updateOptimizerSpreadsheetCell(orderId, columnId, value) {
-  const sourceOrder = state.orders.find((order) => order.id === orderId);
-  if (!sourceOrder) {
-    showToast("Order not found in optimizer sheet.", "error");
-    return;
-  }
-
-  const updatedOrder = buildUpdatedOrderFromSpreadsheetCell(sourceOrder, columnId, value);
-  replaceOrderInState(updatedOrder);
-  render();
-
-  if (!state.apiAvailable) {
-    return;
-  }
-
-  try {
-    const savedOrder = await patchJson(`/orders/${orderId}`, updatedOrder);
-    replaceOrderInState(savedOrder);
-    render();
-  } catch (error) {
-    replaceOrderInState(sourceOrder);
-    render();
-    showToast(`Unable to update VRP data: ${error.message}`, "error");
-  }
+function updateOptimizerSpreadsheetCell(rowId, columnId, value) {
+  updateOptimizerDraftRowCell(rowId, columnId, value);
+  renderOptimizerValidationModal();
 }
 
-function renderOptimizerSpreadsheetTable(orders, emptyCopy) {
+function renderOptimizerSpreadsheetTable(rows, emptyCopy, options = {}) {
   const columns = getOptimizerSpreadsheetColumns();
+  const errorsByRowId = new Map(
+    (options.validationErrors ?? [])
+      .filter((entry) => entry?.rowId)
+      .map((entry) => [entry.rowId, entry.message])
+  );
+  const bodyRows =
+    rows.length > 0
+      ? `${rows
+          .map((row) => {
+            const rowError = errorsByRowId.get(row.id);
+            return `
+              <tr class="${rowError ? "optimizer-spreadsheet__row--invalid" : ""}">
+                ${columns
+                  .map(
+                    (column) => `
+                      <td>
+                        <input
+                          class="optimizer-spreadsheet__cell-input"
+                          type="text"
+                          value="${escapeHtml(getOptimizerSpreadsheetCellValue(row, column.id))}"
+                          data-optimizer-cell="${column.id}"
+                          data-order-id="${row.id}"
+                        />
+                      </td>
+                    `
+                  )
+                  .join("")}
+              </tr>
+            `;
+          })
+          .join("")}${
+          options.showRowErrors !== false
+            ? rows
+                .map((row) => {
+                  const rowError = errorsByRowId.get(row.id);
+                  if (!rowError) {
+                    return "";
+                  }
+
+                  return `
+                    <tr class="optimizer-spreadsheet__issue-row">
+                      <td colspan="${columns.length}">
+                        <strong>Line ${row.rowNumber}</strong> - ${escapeHtml(rowError)}
+                      </td>
+                    </tr>
+                  `;
+                })
+                .join("")
+            : ""
+        }`
+      : `<tr><td colspan="${columns.length}">${escapeHtml(emptyCopy)}</td></tr>`;
+
   return `
     <div class="optimizer-spreadsheet-shell">
       <table class="optimizer-spreadsheet">
@@ -4607,33 +5194,7 @@ function renderOptimizerSpreadsheetTable(orders, emptyCopy) {
               .join("")}
           </tr>
         </thead>
-        <tbody>
-          ${orders.length > 0
-            ? orders
-                .map((order) => {
-                  return `
-                    <tr>
-                      ${columns
-                        .map(
-                          (column) => `
-                            <td>
-                              <input
-                                class="optimizer-spreadsheet__cell-input"
-                                type="text"
-                                value="${escapeHtml(getOptimizerSpreadsheetCellValue(order, column.id))}"
-                                data-optimizer-cell="${column.id}"
-                                data-order-id="${order.id}"
-                              />
-                            </td>
-                          `
-                        )
-                        .join("")}
-                    </tr>
-                  `;
-                })
-                .join("")
-            : `<tr><td colspan="11">${escapeHtml(emptyCopy)}</td></tr>`}
-        </tbody>
+        <tbody>${bodyRows}</tbody>
       </table>
     </div>
   `;
@@ -4914,6 +5475,108 @@ function renderOptimizerRoutesTable(routes, selectedRouteId) {
   `;
 }
 
+function renderOptimizerDraftPreviewTable(rows, emptyCopy) {
+  return `
+    <div class="optimizer-table-wrap">
+      <table class="optimizer-table optimizer-table--dense optimizer-table--vrp-draft">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Reference</th>
+            <th>Address</th>
+            <th>Contact</th>
+            <th>Company</th>
+            <th>Size</th>
+            <th>Window</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length > 0
+            ? rows
+                .map(
+                  (row) => `
+                    <tr>
+                      <td>
+                        <span class="optimizer-stop-pill optimizer-stop-pill--${normalizePickupCellValue(row.pickup) === "yes" ? "pickup" : "delivery"}">
+                          ${normalizePickupCellValue(row.pickup) === "yes" ? "Pickup" : "Drop"}
+                        </span>
+                      </td>
+                      <td>
+                        <div class="optimizer-cell-stack">
+                          <strong>${escapeHtml(row.referenceNumber || (normalizePickupCellValue(row.pickup) === "yes" ? `Pickup ${row.rowNumber}` : `Drop ${row.rowNumber}`))}</strong>
+                          <span>${escapeHtml(row.pickupGroupId || "single")}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="optimizer-cell-stack">
+                          <strong>${escapeHtml(row.address || "Missing address")}</strong>
+                          <span>${escapeHtml([row.postalCode, row.city, row.countryCode].filter(Boolean).join(" "))}</span>
+                        </div>
+                      </td>
+                      <td>${escapeHtml([row.firstName, row.lastName].filter(Boolean).join(" ") || "Pending contact")}</td>
+                      <td>${escapeHtml(row.company || "Unspecified")}</td>
+                      <td><span class="optimizer-stop-pill">${escapeHtml(row.packageSize || "M")}</span></td>
+                      <td>${escapeHtml([row.timeWindowStart, row.timeWindowEnd].filter(Boolean).join(" → ") || "Flexible")}</td>
+                    </tr>
+                  `
+                )
+                .join("")
+            : `<tr><td colspan="7">${escapeHtml(emptyCopy)}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderOptimizerValidationModal() {
+  const content = document.querySelector("#optimizer-validation-modal-content");
+  if (!content) {
+    return;
+  }
+
+  const rows = getOptimizerDraftRows();
+  const validation = getOptimizerDraftValidationReport(rows);
+  const summary = state.optimizerDraftSummary ?? summarizeOptimizerDraftRows(rows);
+  const disableRun = rows.length === 0 || state.optimizerRunLoading || validation.errors.length > 0;
+
+  content.innerHTML = `
+    <p class="eyebrow">VRP Validation</p>
+    <h3 class="modal__title">Review imported pickups and drops</h3>
+    <p class="modal__subtitle">Fix anything directly in the spreadsheet below before running GraphHopper. Column A <code>pickup</code> must stay <code>yes</code> for pickups and <code>no</code> for drops.</p>
+
+    <div class="optimizer-validation-summary">
+      <span class="mini-chip">${escapeHtml(summary.sourceLabel || "VRP draft")}</span>
+      <strong>${summary.dropCount ?? 0} drop(s)</strong>
+      <span>${summary.pickupCount ?? 0} pickup(s)</span>
+      <span>${summary.groupCount ?? 0} pickup group(s)</span>
+    </div>
+
+    ${validation.errors.length > 0
+      ? `
+        <div class="optimizer-validation-errors">
+          <strong>${validation.errors.length} validation issue(s)</strong>
+          <ul>
+            ${validation.errors.map((error) => `<li>Line ${error.rowNumber}: ${escapeHtml(error.message)}</li>`).join("")}
+          </ul>
+        </div>
+      `
+      : `<div class="optimizer-validation-ok"><strong>Validation ready.</strong><span>The draft can be sent to GraphHopper.</span></div>`}
+
+    <form id="optimizer-validation-form" class="stack">
+      ${renderOptimizerSpreadsheetTable(rows, "No VRP rows loaded yet.", {
+        validationErrors: validation.errors
+      })}
+
+      <div class="form-actions">
+        <button class="ghost-button" type="button" data-close-modal="optimizer-validation">Cancel</button>
+        <button class="solid-button" type="submit" ${disableRun ? "disabled" : ""}>
+          ${state.optimizerRunLoading ? "Running..." : "Run"}
+        </button>
+      </div>
+    </form>
+  `;
+}
+
 function exportOptimizerRoute(route, routeOrders) {
   if (!route || routeOrders.length === 0) {
     showToast("No route deliveries to export yet.", "error");
@@ -4959,6 +5622,8 @@ function renderOptimizerView() {
   const planningJobs = getOptimizerPlanningJobs();
   const selectedPlanningJob = getSelectedPlanningJob(planningJobs);
   const selectedPlanningStats = selectedPlanningJob ? getPlanningJobStats(selectedPlanningJob) : null;
+  const selectedPlanUnassignedJobIds = selectedPlanningJob?.unassignedJobIds ?? [];
+  const selectedEligibleOrderCount = getSelectedPlanningOrders().filter((order) => canOrderBePlanned(order)).length;
   const compareJobs = state.selectedComparePlanIds
     .map((planId) => planningJobs.find((job) => job.id === planId))
     .filter(Boolean)
@@ -4975,7 +5640,14 @@ function renderOptimizerView() {
   const eligibleOrders = visibleOrders.filter((order) => !order.routeId && (order.sourceStatus === "ready" || order.sourceStatus === "planned"));
   const liveShifts = state.shifts;
   const visibleRoutes = getVisibleRoutes();
-  const selectedRouteContext = buildOptimizerRouteContext(getOptimizerSelectedRoute(visibleRoutes));
+  const draftRows = getOptimizerDraftRows();
+  const draftSummary = state.optimizerDraftSummary ?? summarizeOptimizerDraftRows(draftRows);
+  const draftValidation = getOptimizerDraftValidationReport(draftRows);
+  const activePlanRoutes = selectedPlanningJob ? getPlanRoutes(selectedPlanningJob.id) : [];
+  const activePlanOrders = selectedPlanningJob ? getPlanOrders(selectedPlanningJob) : [];
+  const optimizedRoutes = activePlanRoutes.length > 0 ? activePlanRoutes : visibleRoutes;
+  const optimizedOrders = activePlanOrders.length > 0 ? activePlanOrders : eligibleOrders.length > 0 ? eligibleOrders : visibleOrders;
+  const selectedRouteContext = buildOptimizerRouteContext(getOptimizerSelectedRoute(optimizedRoutes));
   const selectedRoute = selectedRouteContext.route;
   const selectedDriver = selectedRouteContext.driver;
   const selectedShift = selectedRouteContext.shift;
@@ -4984,7 +5656,15 @@ function renderOptimizerView() {
       ? selectedRouteContext.mapAddresses
       : eligibleOrders.slice(0, 8).flatMap((order) => [order.pickupAddress, order.dropoffAddress]).filter(Boolean);
   const mapProviderLabel = getOpsConfigValue("NAAVAL_GOOGLE_MAPS_EMBED_KEY") ? "Google Maps" : "OSM fallback";
-  const importSummary = state.lastImportSummary
+  const importSummary = draftRows.length > 0
+    ? `
+        <div class="optimizer-import-summary">
+          <span class="mini-chip">${escapeHtml(draftSummary.sourceLabel || "VRP draft")}</span>
+          <strong>${draftSummary.dropCount} drop(s) / ${draftSummary.pickupCount} pickup(s)</strong>
+          <span>${escapeHtml(state.optimizerDraftFileName || "Ready for validation")}</span>
+        </div>
+      `
+    : state.lastImportSummary
     ? `
         <div class="optimizer-import-summary">
           <span class="mini-chip">Last import</span>
@@ -5003,14 +5683,14 @@ function renderOptimizerView() {
       ? `${createTimeLabel(liveShifts[0].startAt)} - ${createTimeLabel(liveShifts.at(-1).endAt)}`
       : "No shift coverage";
   const avgStopsPerRoute =
-    visibleRoutes.length > 0
-      ? (visibleRoutes.reduce((sum, route) => sum + (route.stops?.length ?? 0), 0) / visibleRoutes.length).toFixed(1)
+    optimizedRoutes.length > 0
+      ? (optimizedRoutes.reduce((sum, route) => sum + (route.stops?.length ?? 0), 0) / optimizedRoutes.length).toFixed(1)
       : "0.0";
   const routeUtilization = liveShifts.length > 0 ? Math.min(100, Math.round((eligibleOrders.length / Math.max(1, liveShifts.length * 4)) * 100)) : 0;
   const stageMapAddresses =
     selectedRouteContext.mapAddresses.length > 0
       ? selectedRouteContext.mapAddresses
-      : eligibleOrders.flatMap((order) => [order.pickupAddress, order.dropoffAddress]).filter(Boolean);
+      : optimizedOrders.flatMap((order) => [order.pickupAddress, order.dropoffAddress]).filter(Boolean);
   const selectedRouteLabel = selectedRoute ? formatOptimizerRouteLabel(selectedRoute.id) : "No route selected";
   const selectedVehicleLabel = selectedRoute
     ? labelForVehicleTypeId(selectedShift?.vehicleTypeId) || labelForVehicle(selectedDriver?.vehicleType ?? "van_3m3")
@@ -5049,12 +5729,12 @@ function renderOptimizerView() {
   const truckOptions = Array.from({ length: 70 }, (_, index) => index + 1);
   const activeSizeIndex = Math.max(0, sizeOptions.indexOf(state.optimizerSetup.parcelSize ?? "S"));
   const sizeProgress = sizeOptions.length > 1 ? (activeSizeIndex / (sizeOptions.length - 1)) * 100 : 0;
-  const displayedOrders = eligibleOrders.length > 0 ? eligibleOrders : visibleOrders;
-  const totalDistanceKm = Math.round((visibleRoutes.reduce((sum, route) => sum + (route.totalDistanceMeters ?? 0), 0) || displayedOrders.length * 14500) / 1000);
-  const routeCount = Math.max(visibleRoutes.length, Math.min(3, Math.max(1, liveShifts.length)));
+  const displayedOrders = optimizedOrders;
+  const totalDistanceKm = Math.round((optimizedRoutes.reduce((sum, route) => sum + (route.totalDistanceMeters ?? 0), 0) || displayedOrders.length * 14500) / 1000);
+  const routeCount = Math.max(optimizedRoutes.length, Math.min(3, Math.max(1, liveShifts.length)));
   const globalDurationMinutes =
-    visibleRoutes.length > 0
-      ? Math.round(visibleRoutes.reduce((sum, route) => sum + (route.totalDurationSeconds ?? 0), 0) / 60)
+    optimizedRoutes.length > 0
+      ? Math.round(optimizedRoutes.reduce((sum, route) => sum + (route.totalDurationSeconds ?? 0), 0) / 60)
       : Math.max(240, routeCount * 120);
   const timePerRoadMinutes = Math.max(120, Math.round(globalDurationMinutes / Math.max(1, routeCount)));
   const primaryVolume = displayedOrders[0]?.parcelSize ?? state.optimizerSetup.parcelSize ?? "Medium";
@@ -5199,154 +5879,191 @@ function renderOptimizerView() {
       <article class="optimizer-sheet optimizer-sheet--setup-mock">
         <div class="optimizer-sheet__header optimizer-sheet__header--setup-mock">
           <div>
-            <p class="eyebrow">VRP Setup</p>
-            <h3>Wave Configuration</h3>
+            <p class="eyebrow">VRP Import</p>
+            <h3>CSV first routing builder</h3>
+            <p class="optimizer-sheet__subtitle">Upload a simple pickup/drop CSV, or reuse the orders you selected in <strong>My Orders</strong>. Then configure the fleet and GraphHopper parameters before validating the data.</p>
           </div>
           <button class="solid-button optimizer-sheet__download" type="button" data-action="download-csv-template">Download CSV Template</button>
         </div>
 
-        <div class="optimizer-mock-grid">
-          <div class="optimizer-mock-stack">
-            <div class="optimizer-mock-row">
-              <span>VRP Name</span>
-              <strong>
-                <input class="optimizer-mock-input" type="text" value="${escapeHtml(state.optimizerSetup.name)}" data-optimizer-setup="name" />
-              </strong>
+        <div class="optimizer-import-layout">
+          <section class="optimizer-import-card">
+            <div class="optimizer-import-card__header">
+              <p class="eyebrow">Import Source</p>
+              <h4>Pickup / drop manifest</h4>
             </div>
-            <div class="optimizer-mock-row">
-              <span>Date</span>
-              <strong>
-                <input class="optimizer-mock-input optimizer-mock-input--date" type="date" value="${escapeHtml(state.selectedDate)}" data-optimizer-setup="date" />
-              </strong>
-            </div>
-            <div class="optimizer-mock-row">
-              <span>Start</span>
-              <strong>
-                <button class="optimizer-mock-trigger" type="button" data-action="open-optimizer-time" data-time-field="startTime">${escapeHtml(startTimeLabel)}</button>
-              </strong>
-            </div>
-            <div class="optimizer-mock-row">
-              <span>Manutention</span>
-              <strong>
-                <select class="optimizer-mock-select" data-optimizer-setup="handlingMinutes">
-                  ${handlingOptions
-                    .map(
-                      (minutes) => `
-                        <option value="${minutes}" ${minutes === handlingMinutes ? "selected" : ""}>${minutes} MIN</option>
-                      `
-                    )
-                    .join("")}
-                </select>
-              </strong>
-            </div>
-          </div>
 
-          <div class="optimizer-mock-stack">
-            <div class="optimizer-mock-row">
-              <span>Customer</span>
+            <button class="optimizer-upload-surface optimizer-upload-surface--primary" type="button" data-action="import-csv">
+              <span>Upload CSV</span>
+              <small>Column A must be <code>pickup</code> with <code>yes</code> or <code>no</code>. If the cell is empty or <code>no</code>, the row is treated as a drop.</small>
+            </button>
+
+            <div class="optimizer-import-actions">
+              <button class="ghost-button" type="button" data-action="download-csv-template">Template</button>
+              <button class="ghost-button" type="button" data-action="open-selected-orders-in-optimizer" ${selectedEligibleOrderCount === 0 ? "disabled" : ""}>
+                Use ${selectedEligibleOrderCount} selected order(s)
+              </button>
+            </div>
+
+            <div class="optimizer-import-guide">
+              <p><strong>Expected CSV format</strong></p>
+              <ul>
+                <li><code>pickup = yes</code> creates a pickup / collection row.</li>
+                <li><code>pickup = no</code> or empty creates a delivery / drop row.</li>
+                <li>Each drop inherits the latest pickup row above it.</li>
+                <li>Use one pickup row, then list all related drops underneath it.</li>
+              </ul>
+            </div>
+
+            <div class="optimizer-import-summary optimizer-import-summary--setup">
+              ${importSummary}
+            </div>
+          </section>
+
+          <section class="optimizer-import-card optimizer-import-card--config">
+            <div class="optimizer-import-card__header">
+              <p class="eyebrow">GraphHopper Setup</p>
+              <h4>Run parameters</h4>
+            </div>
+
+            <div class="optimizer-mock-grid optimizer-mock-grid--compact">
+              <div class="optimizer-mock-stack">
+                <div class="optimizer-mock-row">
+                  <span>VRP Name</span>
+                  <strong>
+                    <input class="optimizer-mock-input" type="text" value="${escapeHtml(state.optimizerSetup.name)}" data-optimizer-setup="name" />
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>Date</span>
+                  <strong>
+                    <input class="optimizer-mock-input optimizer-mock-input--date" type="date" value="${escapeHtml(state.selectedDate)}" data-optimizer-setup="date" />
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>Start</span>
+                  <strong>
+                    <button class="optimizer-mock-trigger" type="button" data-action="open-optimizer-time" data-time-field="startTime">${escapeHtml(startTimeLabel)}</button>
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>Manutention</span>
+                  <strong>
+                    <select class="optimizer-mock-select" data-optimizer-setup="handlingMinutes">
+                      ${handlingOptions
+                        .map(
+                          (minutes) => `
+                            <option value="${minutes}" ${minutes === handlingMinutes ? "selected" : ""}>${minutes} MIN</option>
+                          `
+                        )
+                        .join("")}
+                    </select>
+                  </strong>
+                </div>
+              </div>
+
+              <div class="optimizer-mock-stack">
+                <div class="optimizer-mock-row">
+                  <span>Customer</span>
+                  <strong>
+                    <input class="optimizer-mock-input" type="text" list="optimizer-customer-options" value="${escapeHtml(String(customerLabel).toUpperCase())}" data-optimizer-setup="customer" />
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>Trucks</span>
+                  <strong>
+                    <select class="optimizer-mock-select" data-optimizer-setup="trucks">
+                      ${truckOptions
+                        .map(
+                          (count) => `
+                            <option value="${count}" ${count === selectedTrucks ? "selected" : ""}>${count}</option>
+                          `
+                        )
+                        .join("")}
+                    </select>
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>End</span>
+                  <strong>
+                    <button class="optimizer-mock-trigger" type="button" data-action="open-optimizer-time" data-time-field="endTime">${escapeHtml(endTimeLabel)}</button>
+                  </strong>
+                </div>
+                <div class="optimizer-mock-row">
+                  <span>Pickup Landing</span>
+                  <strong>
+                    <select class="optimizer-mock-select" data-optimizer-setup="pickupLandingMinutes">
+                      ${handlingOptions
+                        .map(
+                          (minutes) => `
+                            <option value="${minutes}" ${minutes === pickupLandingMinutes ? "selected" : ""}>${minutes} MIN</option>
+                          `
+                        )
+                        .join("")}
+                    </select>
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            <datalist id="optimizer-customer-options">
+              ${customerOptions.map((customer) => `<option value="${escapeHtml(String(customer).toUpperCase())}"></option>`).join("")}
+            </datalist>
+
+            <div class="optimizer-mock-row optimizer-mock-row--wide">
+              <span>Default Pickup</span>
               <strong>
-                <input class="optimizer-mock-input" type="text" list="optimizer-customer-options" value="${escapeHtml(String(customerLabel).toUpperCase())}" data-optimizer-setup="customer" />
+                <input class="optimizer-mock-input" type="text" value="${escapeHtml(String(pickupAddressLabel).toUpperCase())}" data-optimizer-setup="pickupAddress" />
               </strong>
             </div>
-            <div class="optimizer-mock-row">
-              <span>Trucks</span>
-              <strong>
-                <select class="optimizer-mock-select" data-optimizer-setup="trucks">
-                  ${truckOptions
+
+            <label class="optimizer-mock-row optimizer-mock-row--wide optimizer-mock-row--select">
+              <span>Objective</span>
+              <select class="optimizer-setup-select" data-optimizer-formula>
+                ${optimizerFormulaOptions
+                  .map(
+                    (option) => `
+                      <option value="${option.id}" ${option.id === state.optimizerSetup.formula ? "selected" : ""}>
+                        ${escapeHtml(option.label)}
+                      </option>
+                    `
+                  )
+                  .join("")}
+              </select>
+            </label>
+
+            <section class="optimizer-mock-size">
+              <div class="optimizer-mock-row optimizer-mock-row--center">
+                <span>Default Parcel Size</span>
+                <strong>${escapeHtml(state.optimizerSetup.parcelSize)}</strong>
+              </div>
+              <div class="optimizer-size-scale">
+                <div class="optimizer-size-scale__labels">
+                  ${sizeOptions
                     .map(
-                      (count) => `
-                        <option value="${count}" ${count === selectedTrucks ? "selected" : ""}>${count}</option>
+                      (size) => `
+                        <button class="optimizer-size-scale__label ${size === state.optimizerSetup.parcelSize ? "optimizer-size-scale__label--active" : ""}" type="button" data-action="set-optimizer-setup-size" data-size="${size}">
+                          ${size}
+                        </button>
                       `
                     )
                     .join("")}
-                </select>
-              </strong>
-            </div>
-            <div class="optimizer-mock-row">
-              <span>End</span>
-              <strong>
-                <button class="optimizer-mock-trigger" type="button" data-action="open-optimizer-time" data-time-field="endTime">${escapeHtml(endTimeLabel)}</button>
-              </strong>
-            </div>
-            <div class="optimizer-mock-row">
-              <span>Pickup Landing</span>
-              <strong>
-                <select class="optimizer-mock-select" data-optimizer-setup="pickupLandingMinutes">
-                  ${handlingOptions
-                    .map(
-                      (minutes) => `
-                        <option value="${minutes}" ${minutes === pickupLandingMinutes ? "selected" : ""}>${minutes} MIN</option>
-                      `
-                    )
-                    .join("")}
-                </select>
-              </strong>
-            </div>
-          </div>
+                </div>
+                <div class="optimizer-size-scale__track">
+                  <span class="optimizer-size-scale__fill" style="width:${sizeProgress}%"></span>
+                  <span class="optimizer-size-scale__thumb" style="left:${sizeProgress}%"></span>
+                </div>
+              </div>
+            </section>
+          </section>
         </div>
-
-        <datalist id="optimizer-customer-options">
-          ${customerOptions.map((customer) => `<option value="${escapeHtml(String(customer).toUpperCase())}"></option>`).join("")}
-        </datalist>
-
-        <section class="optimizer-mock-size">
-          <div class="optimizer-mock-row optimizer-mock-row--center">
-            <span>Parcel Size</span>
-            <strong>${escapeHtml(state.optimizerSetup.parcelSize)}</strong>
-          </div>
-          <div class="optimizer-size-scale">
-            <div class="optimizer-size-scale__labels">
-              ${sizeOptions
-                .map(
-                  (size) => `
-                    <button class="optimizer-size-scale__label ${size === state.optimizerSetup.parcelSize ? "optimizer-size-scale__label--active" : ""}" type="button" data-action="set-optimizer-setup-size" data-size="${size}">
-                      ${size}
-                    </button>
-                  `
-                )
-                .join("")}
-            </div>
-            <div class="optimizer-size-scale__track">
-              <span class="optimizer-size-scale__fill" style="width:${sizeProgress}%"></span>
-              <span class="optimizer-size-scale__thumb" style="left:${sizeProgress}%"></span>
-            </div>
-          </div>
-        </section>
-
-        <div class="optimizer-mock-row optimizer-mock-row--wide">
-          <span>Pickup Address</span>
-          <strong>
-            <input class="optimizer-mock-input" type="text" value="${escapeHtml(String(pickupAddressLabel).toUpperCase())}" data-optimizer-setup="pickupAddress" />
-          </strong>
-        </div>
-
-        <label class="optimizer-mock-row optimizer-mock-row--wide optimizer-mock-row--select">
-          <span>Choose Formula</span>
-          <select class="optimizer-setup-select" data-optimizer-formula>
-            ${optimizerFormulaOptions
-              .map(
-                (option) => `
-                  <option value="${option.id}" ${option.id === state.optimizerSetup.formula ? "selected" : ""}>
-                    ${escapeHtml(option.label)}
-                  </option>
-                `
-              )
-              .join("")}
-          </select>
-        </label>
-
-        <button class="optimizer-upload-surface" type="button" data-action="import-csv">
-          <span>Upload CSV Files</span>
-          <small>reference, customer, address, postcode, city, phone, email, parcel size</small>
-        </button>
 
         <div class="optimizer-setup-footer">
-          <div class="optimizer-import-summary optimizer-import-summary--setup">
-            ${importSummary}
-          </div>
           <div class="detail-actions optimizer-actionbar optimizer-actionbar--end">
             <button class="ghost-button" type="button" data-action="seed-demo">Seed Demo</button>
-            <button class="solid-button optimizer-setup-submit" type="button" data-action="run-planning">Optimized</button>
+            <button class="solid-button optimizer-setup-submit" type="button" data-action="set-optimizer-stage" data-optimizer-stage="orders" ${draftRows.length === 0 ? "disabled" : ""}>
+              Review Imported Data
+            </button>
           </div>
         </div>
       </article>
@@ -5355,13 +6072,28 @@ function renderOptimizerView() {
     stageBody = `
       <article class="optimizer-sheet optimizer-sheet--orders-mock">
         <div class="optimizer-sheet__header optimizer-sheet__header--orders-mock">
-          <div></div>
+          <div>
+            <p class="eyebrow">Validation Queue</p>
+            <h3>Pickups and drops preview</h3>
+            <p class="optimizer-sheet__subtitle">Review the imported manifest before opening the editable validation modal. Pickups and drops are already separated here, but the modal lets you correct any cell before the run.</p>
+          </div>
           <button class="solid-button optimizer-sheet__download" type="button" data-action="download-csv-template">Download CSV Template</button>
         </div>
 
-        ${renderOptimizerSpreadsheetTable(
-          eligibleOrders.length > 0 ? eligibleOrders : visibleOrders,
-          "No visible orders found for this day. Create one or import a CSV batch first."
+        ${draftValidation.errors.length > 0
+          ? `
+            <div class="optimizer-validation-errors optimizer-validation-errors--inline">
+              <strong>${draftValidation.errors.length} validation issue(s)</strong>
+              <ul>
+                ${draftValidation.errors.slice(0, 5).map((error) => `<li>Line ${error.rowNumber}: ${escapeHtml(error.message)}</li>`).join("")}
+              </ul>
+            </div>
+          `
+          : `<div class="optimizer-validation-ok optimizer-validation-ok--inline"><strong>Validation ready.</strong><span>The manifest can be opened in spreadsheet mode and sent to GraphHopper.</span></div>`}
+
+        ${renderOptimizerDraftPreviewTable(
+          draftRows,
+          "No VRP data loaded yet. Upload a CSV or open the optimizer from My Orders."
         )}
 
         <div class="optimizer-orders-footer">
@@ -5370,7 +6102,7 @@ function renderOptimizerView() {
           </div>
           <div class="detail-actions optimizer-actionbar optimizer-actionbar--end">
             <button class="solid-button optimizer-validate-button" type="button" data-action="validate-optimizer-data">
-              <span>Validate Data</span>
+              <span>Open Validation Modal</span>
               <span aria-hidden="true">→</span>
             </button>
           </div>
@@ -5381,13 +6113,17 @@ function renderOptimizerView() {
     stageBody = `
       <article class="optimizer-sheet optimizer-sheet--map-mock">
         <div class="optimizer-sheet__header optimizer-sheet__header--orders-mock">
-          <div></div>
-          <button class="solid-button optimizer-sheet__download" type="button" data-action="download-csv-template">Download CSV Template</button>
+          <div>
+            <p class="eyebrow">Optimization Result</p>
+            <h3>${escapeHtml(selectedPlanningJob ? getPlanningJobDisplayName(selectedPlanningJob, planningJobs.findIndex((candidate) => candidate.id === selectedPlanningJob.id)) : "Optimized routes")}</h3>
+            <p class="optimizer-sheet__subtitle">GraphHopper has generated operational tours. Use this overview to inspect the fleet split, open a specific route, and see any unassigned jobs before dispatch.</p>
+          </div>
+          <button class="solid-button optimizer-sheet__download" type="button" data-action="set-optimizer-stage" data-optimizer-stage="routes">Open Route Detail</button>
         </div>
 
         <div class="optimizer-map-layout">
           <div class="optimizer-map-canvas">
-            ${renderOptimizerClusterMap(displayedOrders, "VRP planning map")}
+            ${optimizedRoutes.length > 0 ? renderOptimizerRouteMap(selectedRoute || optimizedRoutes[0], "VRP optimized map") : renderOptimizerClusterMap(displayedOrders, "VRP planning map")}
           </div>
 
           <aside class="optimizer-map-summary">
@@ -5399,30 +6135,42 @@ function renderOptimizerView() {
             <div class="optimizer-map-summary__row"><span>Global Time:</span><strong>${escapeHtml(formatDurationMinutes(globalDurationMinutes * 60))}</strong></div>
             <div class="optimizer-map-summary__row"><span>Manutention:</span><strong>${handlingMinutes * Math.max(1, displayedOrders.length)} MIN</strong></div>
             <div class="optimizer-map-summary__row"><span>KM:</span><strong>${totalDistanceKm} KM</strong></div>
-            <div class="optimizer-map-summary__row"><span>Number of Road:</span><strong>${routeCount}</strong></div>
+            <div class="optimizer-map-summary__row"><span>Number of Road:</span><strong>${optimizedRoutes.length || routeCount}</strong></div>
             <div class="optimizer-map-summary__row"><span>Time / Road:</span><strong>${escapeHtml(formatDurationMinutes(timePerRoadMinutes * 60))}</strong></div>
+            <div class="optimizer-map-summary__row"><span>Unassigned:</span><strong>${selectedPlanUnassignedJobIds.length}</strong></div>
           </aside>
         </div>
 
-        ${renderOptimizerSpreadsheetTable(
-          displayedOrders,
-          "No visible orders found for this day. Create one or import a CSV batch first."
+        ${renderOptimizerRoutesTable(
+          optimizedRoutes,
+          selectedRoute?.id
         )}
+
+        ${selectedPlanUnassignedJobIds.length > 0
+          ? `
+            <div class="optimizer-unassigned-card">
+              <strong>${selectedPlanUnassignedJobIds.length} unassigned job(s)</strong>
+              <span>${escapeHtml(selectedPlanUnassignedJobIds.join(", "))}</span>
+            </div>
+          `
+          : ""}
 
         <div class="optimizer-orders-footer">
           <div class="optimizer-import-summary optimizer-import-summary--setup">
-            ${importSummary}
+            <span class="mini-chip">${escapeHtml(selectedPlanningJob?.solver ? String(selectedPlanningJob.solver).toUpperCase() : "VRP")}</span>
+            <strong>${selectedPlanningStats?.routeCount ?? optimizedRoutes.length} route(s)</strong>
+            <span>${selectedPlanningStats?.orderCount ?? displayedOrders.length} operational drop(s)</span>
           </div>
           <div class="detail-actions optimizer-actionbar optimizer-actionbar--end">
-            <button class="solid-button optimizer-validate-button" type="button" data-action="run-planning">
-              <span>Run Routing</span>
+            <button class="solid-button optimizer-validate-button" type="button" data-action="set-optimizer-stage" data-optimizer-stage="routes">
+              <span>Inspect Routes</span>
             </button>
           </div>
         </div>
       </article>
     `;
   } else {
-    const routeButtons = visibleRoutes
+    const routeButtons = optimizedRoutes
       .map((route, index) => {
         const isActive = route.id === selectedRoute?.id;
         return `
@@ -5453,16 +6201,13 @@ function renderOptimizerView() {
           </aside>
         </div>
 
-        <div class="optimizer-road-switcher ${visibleRoutes.length === 0 ? "optimizer-road-switcher--empty" : ""}">
-          ${visibleRoutes.length > 0
+        <div class="optimizer-road-switcher ${optimizedRoutes.length === 0 ? "optimizer-road-switcher--empty" : ""}">
+          ${optimizedRoutes.length > 0
             ? routeButtons
             : `<button class="optimizer-road-switch optimizer-road-switch--ghost" type="button" data-action="run-planning">ROAD 1</button>`}
         </div>
 
-        ${renderOptimizerSpreadsheetTable(
-          selectedRouteOrders,
-          "No route deliveries yet. Run the routing wave to generate a route manifest."
-        )}
+        ${renderOptimizerStopManifestTable(selectedRoute)}
 
         <div class="optimizer-routes-footer">
           <div class="detail-actions optimizer-actionbar optimizer-actionbar--end">
@@ -5470,8 +6215,8 @@ function renderOptimizerView() {
               <span>Export Deliveries</span>
             </button>
             ${selectedRoute
-              ? `<button class="solid-button optimizer-validate-button" type="button" data-action="dispatch-route" data-route-id="${selectedRoute.id}"><span>Create Deliveries</span></button>`
-              : `<button class="solid-button optimizer-validate-button" type="button" data-action="run-planning"><span>Create Deliveries</span></button>`}
+              ? `<button class="solid-button optimizer-validate-button" type="button" data-action="dispatch-route" data-route-id="${selectedRoute.id}"><span>Dispatch Tour</span></button>`
+              : `<button class="solid-button optimizer-validate-button" type="button" data-action="run-planning"><span>Run Routing</span></button>`}
           </div>
         </div>
       </article>
@@ -5726,8 +6471,175 @@ function renderAdminPricingCard(algo) {
   `;
 }
 
+function selectedTenantRecord() {
+  return state.tenants.find((tenant) => tenant.id === state.selectedTenantId) ?? state.tenants[0] ?? null;
+}
+
+function renderTenantAdminCard(tenant) {
+  const modulesEnabled = (tenant.tenantContext?.modules ?? []).length;
+  const algorithmsEnabled = (tenant.tenantContext?.algorithms ?? []).length;
+
+  return `
+    <button class="admin-user-row__main admin-tenant-row" type="button" data-action="select-tenant" data-tenant-id="${tenant.id}">
+      <div>
+        <p class="route-card__title">${escapeHtml(tenant.companyName || tenant.displayName || tenant.id)}</p>
+        <div class="route-card__meta">
+          <span>${escapeHtml(capitalize(tenant.planId || "trial"))}</span>
+          <span>${tenant.ordersCount ?? tenant.orders ?? 0} orders</span>
+          <span>${tenant.driversCount ?? tenant.drivers ?? 0} drivers</span>
+        </div>
+      </div>
+      <div class="admin-tenant-row__meta">
+        <span class="mini-chip">${modulesEnabled} modules</span>
+        <span class="mini-chip">${algorithmsEnabled} algos</span>
+      </div>
+    </button>
+  `;
+}
+
+function renderTenantAdminSection() {
+  const tenant = selectedTenantRecord();
+  const planOptions = [
+    ["trial", "Trial"],
+    ["starter", "Starter"],
+    ["growth", "Growth"],
+    ["scale", "Scale"],
+    ["enterprise", "Enterprise"]
+  ];
+  const moduleEntries = Object.entries(state.modulesCatalog ?? {});
+  const algorithmEntries = Object.entries(state.algorithmsCatalog ?? {});
+
+  const tenantListMarkup =
+    state.tenants.length > 0
+      ? state.tenants.map((item) => renderTenantAdminCard(item)).join("")
+      : `<div class="placeholder-card"><div><h3>No tenants yet</h3><p>New companies created from signup will appear here automatically.</p></div></div>`;
+
+  const moduleToggles = tenant
+    ? moduleEntries
+        .map(
+          ([moduleId, meta]) => `
+            <label class="toggle-row">
+              <span>${escapeHtml(meta.label ?? moduleId)}</span>
+              <input type="checkbox" name="moduleOverride_${moduleId}" ${tenant.tenantContext?.modules?.includes(moduleId) ? "checked" : ""} />
+            </label>
+          `
+        )
+        .join("")
+    : "";
+
+  const algorithmToggles = tenant
+    ? algorithmEntries
+        .map(
+          ([algorithmId, meta]) => `
+            <label class="toggle-row">
+              <span>${escapeHtml(meta.label ?? algorithmId)}</span>
+              <input type="checkbox" name="algorithmOverride_${algorithmId}" ${tenant.tenantContext?.algorithms?.includes(algorithmId) ? "checked" : ""} />
+            </label>
+          `
+        )
+        .join("")
+    : "";
+
+  return `
+    <section class="admin-card">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">Tenants</p>
+          <h3>Client Companies</h3>
+          <p class="panel__subtitle">Manage SaaS plans, modules, algorithms, and client-specific overrides from the Naaval back-office.</p>
+        </div>
+      </div>
+
+      <div class="admin-grid">
+        <div class="route-list admin-user-list">
+          ${tenantListMarkup}
+        </div>
+
+        <div class="admin-card admin-card--nested">
+          ${
+            tenant
+              ? `
+            <form id="tenant-form" class="admin-form-stack">
+              <input type="hidden" name="tenantId" value="${escapeHtml(tenant.id)}" />
+              <div class="form-grid">
+                <label class="field">
+                  <span>Company Name</span>
+                  <input name="companyName" value="${escapeHtml(tenant.companyName ?? "")}" required />
+                </label>
+                <label class="field">
+                  <span>Display Name</span>
+                  <input name="displayName" value="${escapeHtml(tenant.displayName ?? tenant.companyName ?? "")}" />
+                </label>
+                <label class="field">
+                  <span>Plan</span>
+                  <select name="planId">
+                    ${planOptions
+                      .map(([planId, label]) => `<option value="${planId}" ${tenant.planId === planId ? "selected" : ""}>${label}</option>`)
+                      .join("")}
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Status</span>
+                  <select name="status">
+                    ${["trial", "active", "paused", "disabled"]
+                      .map((status) => `<option value="${status}" ${tenant.status === status ? "selected" : ""}>${capitalize(status)}</option>`)
+                      .join("")}
+                  </select>
+                </label>
+              </div>
+
+              <section class="form-section">
+                <div class="form-section__header">
+                  <div><p class="eyebrow">Modules</p><h4>Visible Modules</h4></div>
+                </div>
+                <div class="toggle-grid">
+                  ${moduleToggles}
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="form-section__header">
+                  <div><p class="eyebrow">Algorithms</p><h4>Accessible Algorithms</h4></div>
+                </div>
+                <div class="toggle-grid">
+                  ${algorithmToggles}
+                </div>
+              </section>
+
+              <div class="form-grid">
+                <label class="field">
+                  <span>Included Drivers</span>
+                  <input name="usageDrivers" type="number" min="0" value="${escapeHtml(String(tenant.tenantContext?.usageLimits?.drivers ?? 0))}" />
+                </label>
+                <label class="field">
+                  <span>Included Orders / Month</span>
+                  <input name="usageOrders" value="${escapeHtml(String(tenant.tenantContext?.usageLimits?.ordersPerMonth ?? ""))}" />
+                </label>
+              </div>
+
+              <div class="form-actions admin-actions">
+                <button class="solid-button" type="submit">Save Tenant</button>
+              </div>
+            </form>
+          `
+              : `<div class="placeholder-card"><div><h3>No tenant selected</h3><p>Select a company on the left to inspect and override its SaaS setup.</p></div></div>`
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderAdminView() {
   const editingOpsUser = state.editingOpsUserId ? state.opsUsers.find((candidate) => candidate.id === state.editingOpsUserId) : null;
+  const roleOptions = [
+    ["company_admin", "Company Admin"],
+    ["company_user", "Company User"]
+  ];
+  if (isPlatformAdmin()) {
+    roleOptions.unshift(["naaval_admin", "Naaval Admin"]);
+    roleOptions.unshift(["super_admin", "Super Admin"]);
+  }
   const usersMarkup =
     state.opsUsers.length > 0
       ? state.opsUsers
@@ -5762,6 +6674,12 @@ function renderAdminView() {
           <strong>New User</strong>
           <span>Create operations accounts and review current ops users.</span>
         </button>
+        ${isPlatformAdmin() ? `
+        <button class="admin-menu__item ${state.adminSection === "tenants" ? "admin-menu__item--active" : ""}" type="button" data-action="set-admin-section" data-admin-section="tenants">
+          <strong>Clients</strong>
+          <span>Pilot plans, modules and algorithm overrides per company.</span>
+        </button>
+        ` : ""}
       </div>
 
       ${state.adminSection === "pricing"
@@ -5779,6 +6697,8 @@ function renderAdminView() {
         </div>
       </section>
         `
+        : state.adminSection === "tenants" && isPlatformAdmin()
+        ? renderTenantAdminSection()
         : `
       <section class="admin-card">
         <div class="admin-card__header">
@@ -5806,10 +6726,12 @@ function renderAdminView() {
             <label class="field">
               <span>Role</span>
               <select name="role">
-                <option value="ops_admin" ${editingOpsUser?.role === "ops_admin" ? "selected" : ""}>Ops Admin</option>
-                <option value="ops_manager" ${editingOpsUser?.role === "ops_manager" ? "selected" : ""}>Ops Manager</option>
-                <option value="ops_dispatcher" ${editingOpsUser?.role === "ops_dispatcher" ? "selected" : ""}>Dispatcher</option>
-                <option value="ops_agent" ${!editingOpsUser || editingOpsUser?.role === "ops_agent" ? "selected" : ""}>Ops Agent</option>
+                ${roleOptions
+                  .map(
+                    ([value, label]) =>
+                      `<option value="${value}" ${(!editingOpsUser && value === "company_user") || editingOpsUser?.role === value ? "selected" : ""}>${label}</option>`
+                  )
+                  .join("")}
               </select>
             </label>
             <label class="field">
@@ -6095,6 +7017,11 @@ function handleOptimizerTimeSubmit(event) {
   render();
 }
 
+async function handleOptimizerValidationSubmit(event) {
+  event.preventDefault();
+  await runDraftPlanning(getOptimizerDraftRows());
+}
+
 async function handleInboxReplySubmit(event) {
   event.preventDefault();
 
@@ -6180,6 +7107,10 @@ async function ensureSelectedRouteGeometry() {
 }
 
 function render() {
+  const activeModule = VIEW_MODULE_REQUIREMENTS[state.activeView];
+  if (state.activeView !== "admin" && activeModule && !isModuleEnabled(activeModule)) {
+    state.activeView = "orders";
+  }
   document.querySelector(".main")?.classList.toggle("main--pricing", state.activeView === "pricing");
   document.querySelector(".main")?.classList.toggle("main--orders-summary", state.activeView === "orders");
   document.querySelector(".main")?.classList.toggle("main--optimizer", state.activeView === "optimizer");
@@ -6199,6 +7130,7 @@ function render() {
   renderRecurringRouteDetailModal();
   renderAdminPricingModalForm();
   renderOptimizerTimeModal();
+  renderOptimizerValidationModal();
   ensureGraphhopperUsageLoaded();
   void ensureSelectedRouteGeometry();
 }
@@ -6541,6 +7473,74 @@ function mapCsvRowsToOrders(text) {
   });
 }
 
+function buildDraftRowFromCsvObject(rowObject, rowNumber) {
+  const pickupFlag = normalizePickupCellValue(csvValue(rowObject, ["pickup", "ispickup", "collection", "pickupflag"]));
+  if (!pickupFlag) {
+    throw new Error("pickup must be yes or no");
+  }
+
+  return createDraftRow({
+    rowNumber,
+    pickup: pickupFlag,
+    address: csvValue(rowObject, ["address", "street1", "street", "destination", "dropoff", "pickupaddress"]).trim(),
+    company: csvValue(rowObject, ["company", "customer", "client", "merchant", "merchantname"]).trim(),
+    firstName: csvValue(rowObject, ["firstname", "contactfirstname", "recipientfirstname"]).trim(),
+    lastName: csvValue(rowObject, ["lastname", "contactlastname", "recipientlastname"]).trim(),
+    phone: csvValue(rowObject, ["phone", "telephone", "mobile"]).trim(),
+    email: csvValue(rowObject, ["email", "mail"]).trim(),
+    comment: csvValue(rowObject, ["comment", "comments", "note", "notes", "instructions"]).trim(),
+    packageSize: csvValue(rowObject, ["packagesize", "parcelsize", "size"]).trim() || "M",
+    parcelCount: csvValue(rowObject, ["parcelcount", "parcels", "qty", "quantity"]).trim() || "1",
+    weightKg: csvValue(rowObject, ["weightkg", "weight"]).trim(),
+    volumeDm3: csvValue(rowObject, ["volumedm3", "volume"]).trim(),
+    timeWindowStart: csvValue(rowObject, ["timewindowstart", "windowstart", "slotstart"]).trim(),
+    timeWindowEnd: csvValue(rowObject, ["timewindowend", "windowend", "slotend"]).trim(),
+    coldChain: csvValue(rowObject, ["coldchain", "cold_chain"]).trim() || "no",
+    fragile: csvValue(rowObject, ["fragile"]).trim() || "no",
+    returnFlag: csvValue(rowObject, ["return", "isreturn", "returnflag"]).trim() || "no",
+    referenceNumber: csvValue(rowObject, ["referencenumber", "reference", "orderreference", "externalreference"]).trim(),
+    postalCode: csvValue(rowObject, ["postalcode", "postcode", "zip", "zipcode"]).trim(),
+    city: csvValue(rowObject, ["city"]).trim(),
+    countryCode: csvValue(rowObject, ["countrycode", "country"]).trim() || "FR",
+    lat: csvValue(rowObject, ["lat", "latitude"]).trim(),
+    lon: csvValue(rowObject, ["lon", "lng", "longitude"]).trim(),
+    source: "csv"
+  });
+}
+
+function mapCsvRowsToDraftRows(text) {
+  const rows = parseCsv(text);
+
+  if (rows.length < 2) {
+    throw new Error("the CSV must contain a header row and at least one data row");
+  }
+
+  const headers = rows[0].map((header) => normalizeCsvHeader(header));
+  if (headers[0] !== "pickup") {
+    throw new Error("column A must be `pickup` and contain yes or no");
+  }
+
+  const dataRows = rows.slice(1);
+  let groupCounter = 0;
+  let currentPickupGroupId = "";
+
+  return dataRows.map((cells, index) => {
+    const rowObject = {};
+    headers.forEach((header, columnIndex) => {
+      rowObject[header] = (cells[columnIndex] ?? "").trim();
+    });
+
+    const row = buildDraftRowFromCsvObject(rowObject, index + 2);
+    if (normalizePickupCellValue(row.pickup) === "yes") {
+      groupCounter += 1;
+      currentPickupGroupId = `pickup_group_${groupCounter}`;
+    }
+
+    row.pickupGroupId = currentPickupGroupId;
+    return row;
+  });
+}
+
 async function handleOrderSubmit(event) {
   event.preventDefault();
 
@@ -6869,6 +7869,22 @@ async function importOrdersPayloads(payloads, fileName) {
   showToast(`${createdOrders.length} order(s) imported locally from ${fileName}.`);
 }
 
+function primeOptimizerFromSelectedOrders() {
+  const selectedEligibleOrders = getSelectedPlanningOrders().filter((order) => canOrderBePlanned(order));
+  if (selectedEligibleOrders.length === 0) {
+    showToast("Select at least one eligible order first.", "error");
+    return false;
+  }
+
+  const draftRows = buildOptimizerDraftRowsFromSelectedOrders(selectedEligibleOrders);
+  setOptimizerDraftRows(draftRows, "orders", `${selectedEligibleOrders.length} selected order(s)`);
+  state.selectedPlanningJobId = null;
+  state.selectedOptimizerRouteId = null;
+  state.activeView = "optimizer";
+  state.activeOptimizerStage = "setup";
+  return true;
+}
+
 async function handleCsvImport(event) {
   const file = event.currentTarget.files?.[0];
 
@@ -6884,8 +7900,18 @@ async function handleCsvImport(event) {
 
   try {
     const text = await file.text();
-    const payloads = mapCsvRowsToOrders(text);
-    await importOrdersPayloads(payloads, file.name);
+    const draftRows = mapCsvRowsToDraftRows(text);
+    setOptimizerDraftRows(draftRows, "csv", file.name);
+    state.selectedPlanningJobId = null;
+    state.selectedOptimizerRouteId = null;
+    state.lastImportSummary = {
+      fileName: file.name,
+      created: draftRows.filter((row) => normalizePickupCellValue(row.pickup) === "no").length
+    };
+    state.activeView = "optimizer";
+    state.activeOptimizerStage = "orders";
+    render();
+    showToast(`${draftRows.length} CSV row(s) loaded into the VRP validation flow.`);
   } catch (error) {
     showToast(`CSV import failed: ${error.message}`, "error");
   } finally {
@@ -7123,11 +8149,62 @@ async function handleOpsUserSubmit(event) {
 
     form.reset();
     state.editingOpsUserId = null;
-    state.selectedOpsUserId = savedUser?.id ?? editingUserId || state.selectedOpsUserId;
+    state.selectedOpsUserId = savedUser?.id ?? editingUserId ?? state.selectedOpsUserId;
     render();
     showToast(`Ops user ${payload.firstName} ${editingUserId ? "updated" : "created"}. Login: ${payload.email} / ${payload.temporaryPassword}`);
   } catch (error) {
     showToast(`Unable to ${editingUserId ? "update" : "create"} ops user: ${error.message}`, "error");
+  }
+}
+
+async function handleTenantSubmit(event) {
+  event.preventDefault();
+
+  if (!isPlatformAdmin()) {
+    showToast("Tenant configuration is reserved to the Naaval back-office.", "error");
+    return;
+  }
+
+  const form = event.currentTarget;
+  const tenantId = form.elements.tenantId.value.trim();
+  if (!tenantId) {
+    showToast("Select a tenant first.", "error");
+    return;
+  }
+
+  const currentTenant = state.tenants.find((tenant) => tenant.id === tenantId);
+  const currentModules = currentTenant?.tenantContext?.modules ?? [];
+  const currentAlgorithms = currentTenant?.tenantContext?.algorithms ?? [];
+  const nextModules = Object.keys(state.modulesCatalog ?? {}).reduce((accumulator, moduleId) => {
+    accumulator[moduleId] = form.elements[`moduleOverride_${moduleId}`]?.checked ?? currentModules.includes(moduleId);
+    return accumulator;
+  }, {});
+  const nextAlgorithms = Object.keys(state.algorithmsCatalog ?? {}).reduce((accumulator, algorithmId) => {
+    accumulator[algorithmId] = form.elements[`algorithmOverride_${algorithmId}`]?.checked ?? currentAlgorithms.includes(algorithmId);
+    return accumulator;
+  }, {});
+
+  const payload = {
+    companyName: form.elements.companyName.value.trim(),
+    displayName: form.elements.displayName.value.trim(),
+    planId: form.elements.planId.value,
+    status: form.elements.status.value,
+    moduleOverrides: nextModules,
+    algorithmOverrides: nextAlgorithms,
+    usageOverrides: {
+      drivers: Number.parseInt(form.elements.usageDrivers.value || "0", 10) || 0,
+      ordersPerMonth: form.elements.usageOrders.value.trim() || "Unlimited"
+    }
+  };
+
+  try {
+    const updatedTenant = await patchJson(`/admin/tenants/${tenantId}`, payload);
+    await refreshData();
+    state.selectedTenantId = updatedTenant.id;
+    render();
+    showToast(`Tenant ${updatedTenant.companyName || updatedTenant.displayName} updated.`);
+  } catch (error) {
+    showToast(`Unable to update tenant: ${error.message}`, "error");
   }
 }
 
@@ -7752,14 +8829,21 @@ function getPlanningCandidates() {
     ? selectedOrders
     : getVisibleOrders().filter((order) => canOrderBePlanned(order));
   const orderIds = candidateOrders.map((order) => order.id);
-  const requestedTruckCount = Math.max(1, Number.parseInt(String(state.optimizerSetup?.trucks ?? state.shifts.length ?? 1), 10) || state.shifts.length || 1);
-  const driverShiftIds = state.shifts.slice(0, Math.min(requestedTruckCount, state.shifts.length)).map((shift) => shift.id);
+  const driverShiftIds = getRequestedPlanningShiftIds();
 
   return {
     orderIds,
     driverShiftIds,
     hubId: getDefaultHubId()
   };
+}
+
+function getRequestedPlanningShiftIds() {
+  const requestedTruckCount = Math.max(
+    1,
+    Number.parseInt(String(state.optimizerSetup?.trucks ?? state.shifts.length ?? 1), 10) || state.shifts.length || 1
+  );
+  return state.shifts.slice(0, Math.min(requestedTruckCount, state.shifts.length)).map((shift) => shift.id);
 }
 
 function createLocalMockRoutes(planId, orders, shifts) {
@@ -7889,6 +8973,12 @@ async function seedDemoData() {
 }
 
 async function runPlanning() {
+  const draftRows = getOptimizerDraftRows();
+  if (draftRows.length > 0) {
+    await runDraftPlanning(draftRows);
+    return;
+  }
+
   const planning = getPlanningCandidates();
 
   if (planning.orderIds.length === 0) {
@@ -7949,6 +9039,68 @@ async function runPlanning() {
   ensureSelections();
   render();
   showToast(`Local planning completed. ${routes.length} route(s) created.`);
+}
+
+async function runDraftPlanning(draftRows) {
+  const validation = getOptimizerDraftValidationReport(draftRows);
+
+  if (!validation.isValid) {
+    state.optimizerDraftErrors = validation.errors;
+    renderOptimizerValidationModal();
+    showToast("Fix the highlighted VRP validation issues before running GraphHopper.", "error");
+    return;
+  }
+
+  const driverShiftIds = getRequestedPlanningShiftIds();
+  if (driverShiftIds.length === 0) {
+    showToast("No driver shifts configured. Seed demo data to create operational capacity.", "error");
+    return;
+  }
+
+  if (!state.apiAvailable) {
+    showToast("The CSV-first VRP flow needs the Naaval local API to run GraphHopper.", "error");
+    return;
+  }
+
+  state.optimizerRunLoading = true;
+  renderOptimizerValidationModal();
+
+  try {
+    const solver = state.solverMode === "GraphHopper Ready" ? "graphhopper" : "mock";
+    const result = await postJson("/planning/optimize-draft", {
+      hubId: getDefaultHubId(),
+      planDate: toPlanDate(),
+      driverShiftIds,
+      objectivePreset: getOptimizerObjectivePreset(),
+      solver,
+      source: state.optimizerDraftSource || "csv",
+      optimizerSetup: clone(state.optimizerSetup)
+        ? {
+            ...clone(state.optimizerSetup),
+            date: state.selectedDate
+          }
+        : { date: state.selectedDate },
+      rows: draftRows
+    });
+
+    await refreshData();
+    state.selectedPlanningJobId = result.planningJobId;
+    state.selectedOptimizerRouteId = result.routeIds?.[0] ?? null;
+    state.selectedPlanningOrderIds = result.orderIds ?? [];
+    state.activeView = "optimizer";
+    state.activeOptimizerStage = result.routeIds?.length > 0 ? "map" : "routes";
+    closeModal("optimizer-validation");
+    render();
+
+    const solverLabel = result.solver === "graphhopper" ? "GraphHopper" : "Naaval local planner";
+    const note = result.note ? ` ${result.note}` : "";
+    showToast(`VRP completed with ${solverLabel}. ${result.routeIds?.length ?? 0} operational tour(s) generated.${note}`);
+  } catch (error) {
+    showToast(`Planning failed: ${error.message}`, "error");
+  } finally {
+    state.optimizerRunLoading = false;
+    renderOptimizerValidationModal();
+  }
 }
 
 async function dispatchRoute(routeId) {
@@ -8243,15 +9395,10 @@ function handleDocumentClick(event) {
     }
 
     if (action === "open-selected-orders-in-optimizer") {
-      const selectedEligibleOrders = getSelectedPlanningOrders().filter((order) => canOrderBePlanned(order));
-      if (selectedEligibleOrders.length === 0) {
-        showToast("Select at least one eligible order first.", "error");
-        return;
+      if (primeOptimizerFromSelectedOrders()) {
+        render();
+        showToast(`${getSelectedPlanningOrders().filter((order) => canOrderBePlanned(order)).length} order(s) ready for VRP optimization.`);
       }
-      state.activeView = "optimizer";
-      state.activeOptimizerStage = "setup";
-      render();
-      showToast(`${selectedEligibleOrders.length} order(s) ready for VRP optimization.`);
       return;
     }
 
@@ -8267,6 +9414,9 @@ function handleDocumentClick(event) {
     }
 
     if (action === "open-optimizer-builder") {
+      resetOptimizerDraftState();
+      state.selectedPlanningJobId = null;
+      state.selectedOptimizerRouteId = null;
       state.activeOptimizerStage = "setup";
       render();
       return;
@@ -8305,14 +9455,13 @@ function handleDocumentClick(event) {
     }
 
     if (action === "validate-optimizer-data") {
-      const visibleOrders = getVisibleOrders();
-      if (visibleOrders.length === 0) {
+      const draftRows = getOptimizerDraftRows();
+      if (draftRows.length === 0) {
         showToast("No imported data to validate yet.", "error");
         return;
       }
 
-      state.activeOptimizerStage = "map";
-      render();
+      openModal("optimizer-validation");
       return;
     }
 
@@ -8347,6 +9496,13 @@ function handleDocumentClick(event) {
 
     if (action === "set-admin-section") {
       state.adminSection = actionButton.getAttribute("data-admin-section");
+      render();
+      return;
+    }
+
+    if (action === "select-tenant") {
+      state.selectedTenantId = actionButton.getAttribute("data-tenant-id");
+      state.adminSection = "tenants";
       render();
       return;
     }
@@ -8530,6 +9686,11 @@ function handleDocumentSubmit(event) {
     return;
   }
 
+  if (event.target.matches("#optimizer-validation-form")) {
+    void handleOptimizerValidationSubmit(event);
+    return;
+  }
+
   if (event.target.matches("#pricing-admin-form")) {
     handlePricingAdminSubmit(event);
     return;
@@ -8550,6 +9711,11 @@ function handleDocumentSubmit(event) {
     return;
   }
 
+  if (event.target.matches("#tenant-form")) {
+    handleTenantSubmit(event);
+    return;
+  }
+
   if (event.target.matches("#recurring-route-form")) {
     handleRecurringRouteSubmit(event);
     return;
@@ -8559,42 +9725,50 @@ function handleDocumentSubmit(event) {
 function handleLoginSubmit(event) {
   event.preventDefault();
 
-  const form = event.currentTarget;
-  const email = form.elements.email.value.trim().toLowerCase();
-  const password = form.elements.password.value.trim();
-  const matchingUser =
-    state.opsUsers.find((user) => String(user.email ?? "").trim().toLowerCase() === email) ??
-    (email === "pierre@naaval.app"
-      ? {
-          id: "ops_demo_pierre",
-          firstName: "Pierre",
-          lastName: "Ops",
-          email,
-          temporaryPassword: "demo"
-        }
-      : null);
-  const expectedPassword = String(matchingUser?.temporaryPassword ?? "demo").trim() || "demo";
+  void (async () => {
+    const form = event.currentTarget;
+    const email = form.elements.email.value.trim().toLowerCase();
+    const password = form.elements.password.value.trim();
 
-  if (!matchingUser || password !== expectedPassword) {
-    showToast("Use a valid ops email and the matching temporary password.", "error");
-    return;
-  }
+    if (!email || !password) {
+      showToast("Use a valid ops email and the matching temporary password.", "error");
+      return;
+    }
 
-  loginWithProfile(matchingUser, "password");
-  showToast(`Welcome back ${matchingUser.firstName ?? "Ops"}.`);
+    try {
+      const session = await postJson("/auth/login", { email, password });
+      applyAuthenticatedSession(session);
+      await refreshData();
+      showToast(`Welcome back ${session.firstName ?? "Ops"}.`);
+    } catch (error) {
+      showToast(error.message || "Use a valid ops email and the matching temporary password.", "error");
+    }
+  })();
 }
 
 function handleGoogleLogin() {
-  loginWithProfile(
-    {
-      id: "ops_google_demo",
-      firstName: "Pierre",
-      lastName: "Google",
-      email: "pierre@naaval.app"
-    },
-    "google-demo"
-  );
-  showToast("Google login simulated in prototype mode.");
+  const clientId = getOpsConfigValue("NAAVAL_GOOGLE_CLIENT_ID");
+  if (!clientId) {
+    showToast("Google Sign-In needs a Google Client ID in ops-config.js for this environment.", "error");
+    return;
+  }
+
+  if (!window.google?.accounts?.id) {
+    setupGoogleIdentity();
+    showToast("Google Sign-In is still loading. Retry in a second.", "error");
+    return;
+  }
+
+  if (triggerRenderedGoogleButton()) {
+    return;
+  }
+
+  setupGoogleIdentity();
+  window.setTimeout(() => {
+    if (!triggerRenderedGoogleButton()) {
+      showToast("Google Sign-In could not open. Check the authorized JavaScript origins for this URL.", "error");
+    }
+  }, 250);
 }
 
 function bindEvents() {
@@ -8616,13 +9790,32 @@ function bindEvents() {
 async function initialize() {
   bindEvents();
   syncOpsLiveRefreshLoop();
+  const url = new URL(window.location.href);
+  const sessionTokenFromUrl = url.searchParams.get("sessionToken");
   const session = restoreSession();
-  if (session?.email) {
+  if (sessionTokenFromUrl) {
+    state.isAuthenticated = true;
+    state.currentUser = { token: sessionTokenFromUrl, source: "signup" };
+  } else if (session?.token) {
     state.isAuthenticated = true;
     state.currentUser = session;
   }
   updateAuthUi();
-  await refreshData();
+  if (state.isAuthenticated) {
+    try {
+      const sessionPayload = await fetchJson("/auth/me");
+      applyAuthenticatedSession(sessionPayload);
+      if (sessionTokenFromUrl) {
+        url.searchParams.delete("sessionToken");
+        window.history.replaceState({}, "", url.toString());
+      }
+      await refreshData();
+    } catch (_error) {
+      logout();
+    }
+  } else {
+    render();
+  }
   setupGoogleIdentity();
 }
 

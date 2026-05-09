@@ -72,8 +72,10 @@
             <div class="login-credentials">
               <strong>Demo access</strong>
               <p><code>pierre@naaval.app</code> with password <code>demo</code>.</p>
+              <p><code>demo@naaval.app</code> with password <code>demo</code>.</p>
               <p>Any ops account created from <code>Admin &gt; New User</code> can log in here with its email and temporary password.</p>
-              <p>For live Google Sign-In and Google Maps, fill <code>ops-config.js</code> with your Google Client ID and Maps API key.</p>
+              <p>For live Google Sign-In, add a real Google Client ID in <code>ops-config.js</code> and authorize this URL in Google Cloud.</p>
+              <p>For live Google Maps, also fill the Maps API key in <code>ops-config.js</code>.</p>
             </div>
           </div>
         </section>
@@ -568,6 +570,14 @@
             <button class="solid-button" type="submit">Save Time</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="optimizer-validation-modal">
+      <div class="modal__backdrop" data-close-modal="optimizer-validation"></div>
+      <div class="modal__dialog modal__dialog--detail modal__dialog--optimizer-validation">
+        <button class="modal__close" type="button" data-close-modal="optimizer-validation">Close</button>
+        <div id="optimizer-validation-modal-content"></div>
       </div>
     </div>
 
