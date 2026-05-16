@@ -191,6 +191,24 @@ body.auth-locked .ui-scale-root {
   width: 100% !important;
 }
 
+.login-status {
+  margin-top: 0.9rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(12, 91, 74, 0.14);
+  background: rgba(244, 247, 244, 0.94);
+  color: var(--naaval-green-deep);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.login-status--error {
+  border-color: rgba(171, 36, 52, 0.18);
+  background: rgba(255, 239, 241, 0.96);
+  color: #9d2436;
+}
+
 .login-feature-grid {
   position: relative;
   z-index: 1;
@@ -2848,13 +2866,14 @@ textarea {
   position: fixed;
   right: 1.25rem;
   bottom: 1.25rem;
-  z-index: 90;
+  z-index: 9999;
   max-width: 420px;
   padding: 1rem 1.1rem;
   border-radius: 16px;
   background: rgba(12, 91, 74, 0.92);
   color: white;
   box-shadow: 0 18px 40px rgba(12, 91, 74, 0.28);
+  pointer-events: none;
 }
 
 .modal {
@@ -3428,6 +3447,39 @@ textarea {
   margin-bottom: 1rem;
 }
 
+.admin-layout--saas {
+  grid-template-columns: 260px minmax(0, 1fr);
+  align-items: start;
+}
+
+.main--saas-admin .top-chrome {
+  padding-bottom: 0;
+}
+
+.main--saas-admin .hero {
+  padding-bottom: 1.2rem;
+}
+
+.main--saas-admin .panel {
+  padding-top: 1.35rem;
+}
+
+.main--saas-admin .admin-layout--saas {
+  gap: 1.25rem;
+}
+
+.admin-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.admin-menu--saas {
+  grid-template-columns: 1fr;
+  margin-bottom: 0;
+  position: sticky;
+  top: 1rem;
+}
+
 .admin-menu__item {
   padding: 1rem 1.1rem;
   border: 1px solid rgba(12, 91, 74, 0.1);
@@ -3497,11 +3549,109 @@ textarea {
   padding: 1.2rem;
 }
 
+.admin-card--access code {
+  font-size: 0.95em;
+}
+
 .admin-tenant-row__meta {
   display: inline-flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.45rem;
+}
+
+.admin-tenant-row--active {
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px rgba(22, 152, 115, 0.42);
+}
+
+.backoffice-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.backoffice-kpi-card,
+.backoffice-tenant-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(12, 91, 74, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.backoffice-kpi-card span {
+  color: var(--naaval-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.backoffice-kpi-card strong {
+  font-size: 1.8rem;
+  letter-spacing: -0.04em;
+}
+
+.backoffice-tenant-card {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.backoffice-tenant-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(22, 152, 115, 0.28);
+  box-shadow: 0 14px 28px rgba(22, 152, 115, 0.12);
+}
+
+.backoffice-tenant-card strong {
+  display: block;
+  font-size: 1.02rem;
+}
+
+.backoffice-tenant-card span {
+  color: var(--naaval-muted);
+  font-size: 0.84rem;
+}
+
+.backoffice-tenant-card__stats {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.backoffice-tenant-card__stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 32px;
+  padding: 0 0.7rem;
+  border: 1px solid rgba(12, 91, 74, 0.1);
+  border-radius: 999px;
+  background: rgba(246, 247, 244, 0.9);
+  color: var(--naaval-green-deep);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.backoffice-tenant-detail {
+  display: grid;
+  gap: 1rem;
+}
+
+.backoffice-tenant-detail__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.backoffice-tenant-detail__header h3 {
+  margin: 0.2rem 0 0;
 }
 
 .toggle-grid {
@@ -3948,6 +4098,20 @@ textarea {
 
   .optimizer-metric-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-menu,
+  .admin-menu--saas,
+  .backoffice-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-layout--saas {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-menu--saas {
+    position: static;
   }
 
   .optimizer-mock-grid {

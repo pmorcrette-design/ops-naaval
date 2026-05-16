@@ -49,15 +49,34 @@
             <h2>Access the ops interface</h2>
             <p class="login-card__helper">Use your ops credentials or Google Sign-In to unlock the Naaval operations workspace.</p>
 
-            <form id="login-form" class="stack">
+            <form id="login-form" class="stack" novalidate>
               <label class="field">
                 <span>Email</span>
-                <input name="email" type="email" placeholder="" required />
+                <input
+                  name="email"
+                  type="email"
+                  placeholder=""
+                  required
+                  autocomplete="username"
+                  inputmode="email"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck="false"
+                />
               </label>
 
               <label class="field">
                 <span>Password</span>
-                <input name="password" type="password" placeholder="" required />
+                <input
+                  name="password"
+                  type="password"
+                  placeholder=""
+                  required
+                  autocomplete="current-password"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck="false"
+                />
               </label>
 
               <div class="form-actions login-card__actions">
@@ -68,6 +87,7 @@
             <div class="login-divider"><span>or</span></div>
             <div class="login-google-slot" id="google-login-slot"></div>
             <button class="ghost-button login-google-button" id="google-login-button" type="button">Connect with Google</button>
+            <div class="login-status hidden" id="login-status" role="status" aria-live="polite"></div>
 
             <div class="login-credentials">
               <strong>Demo access</strong>
@@ -89,9 +109,9 @@
           <img src="./assets/logo-mark.svg" alt="Naaval" class="sidebar__logo" />
         </div>
 
-        <button class="primary-cta" type="button" data-open-modal="order">
+        <button class="primary-cta" id="sidebar-primary-cta" type="button" data-open-modal="order">
           <span class="primary-cta__plus">+</span>
-          <span>New Order</span>
+          <span id="sidebar-primary-cta-label">New Order</span>
         </button>
 
         <nav class="nav">
@@ -119,7 +139,7 @@
             <span class="nav__icon" aria-hidden="true">PS</span>
             <span>Pricing Simulator</span>
           </button>
-          <button class="nav__item" type="button" data-view="admin">
+          <button class="nav__item hidden" type="button" data-view="admin">
             <span class="nav__icon" aria-hidden="true">AD</span>
             <span>Admin</span>
           </button>
@@ -213,7 +233,6 @@
       </main>
       </div>
 
-      <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
       <input id="csv-import-input" class="hidden" type="file" accept=".csv,text/csv" />
 
     <div class="modal hidden" id="order-detail-modal">
@@ -237,6 +256,102 @@
       <div class="modal__dialog modal__dialog--detail">
         <button class="modal__close" type="button" data-close-modal="customer-detail">Close</button>
         <div id="customer-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="tenant-detail-modal">
+      <div class="modal__backdrop" data-close-modal="tenant-detail"></div>
+      <div class="modal__dialog modal__dialog--detail">
+        <button class="modal__close" type="button" data-close-modal="tenant-detail">Close</button>
+        <div id="tenant-detail-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="tenant-create-modal">
+      <div class="modal__backdrop" data-close-modal="tenant-create"></div>
+      <div class="modal__dialog modal__dialog--small">
+        <button class="modal__close" type="button" data-close-modal="tenant-create">Close</button>
+        <p class="eyebrow">Naaval SaaS</p>
+        <h3 class="modal__title">Create Customer</h3>
+        <p class="modal__subtitle">Create a new transport company, assign its first admin, and provision its Naaval workspace instantly.</p>
+
+        <form id="tenant-create-form" class="stack">
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Company</p>
+                <h4>Customer Account</h4>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Company Name</span>
+                <input name="companyName" placeholder="Blue Mile Logistics" required />
+              </label>
+              <label class="field">
+                <span>Display Name</span>
+                <input name="displayName" placeholder="Blue Mile" />
+              </label>
+              <label class="field">
+                <span>Plan</span>
+                <select name="planId">
+                  <option value="trial">Trial</option>
+                  <option value="starter">Starter</option>
+                  <option value="growth">Growth</option>
+                  <option value="scale">Scale</option>
+                  <option value="enterprise">Enterprise</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Status</span>
+                <select name="status">
+                  <option value="active">Active</option>
+                  <option value="trial">Trial</option>
+                  <option value="paused">Paused</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <div class="form-section__header">
+              <div>
+                <p class="eyebrow">Company Admin</p>
+                <h4>First Access</h4>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>First Name</span>
+                <input name="adminFirstName" placeholder="Clara" required />
+              </label>
+              <label class="field">
+                <span>Last Name</span>
+                <input name="adminLastName" placeholder="Durand" required />
+              </label>
+              <label class="field">
+                <span>Email</span>
+                <input name="adminEmail" type="email" placeholder="clara@bluemile.com" required />
+              </label>
+              <label class="field">
+                <span>Phone</span>
+                <input name="adminPhone" placeholder="+33 6 00 00 00 00" />
+              </label>
+              <label class="field">
+                <span>Temporary Password</span>
+                <input name="temporaryPassword" placeholder="demo" />
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-close-modal="tenant-create">Cancel</button>
+            <button class="solid-button" type="submit">Create Customer</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -282,6 +397,11 @@
               <label class="field">
                 <span>Company Phone</span>
                 <input name="companyPhone" placeholder="+33100000000" />
+              </label>
+
+              <label class="field">
+                <span>Portal Password</span>
+                <input name="portalPassword" type="password" placeholder="demo" autocomplete="new-password" />
               </label>
 
               <label class="field">
@@ -764,6 +884,11 @@
                 <input name="phone" placeholder="+33600000000" />
               </label>
 
+              <label class="field">
+                <span>App Password</span>
+                <input name="temporaryPassword" type="password" placeholder="demo" autocomplete="new-password" />
+              </label>
+
               <label class="field field--wide">
                 <span>Tagg</span>
                 <input name="skills" placeholder="fragile, cold_chain, ev, bike" />
@@ -1070,7 +1195,10 @@
       </div>
     </div>
 
-      <script type="module" src="./app.js"></script>
     </div>
+
+    <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

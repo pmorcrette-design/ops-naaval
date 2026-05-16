@@ -2,19 +2,27 @@ function normalizeApiBaseUrl(value) {
   return String(value ?? "").trim().replace(/\/+$/, "");
 }
 
+function isLocalRuntimeHost(hostname = window.location.hostname) {
+  const normalizedHost = String(hostname ?? "").trim().toLowerCase();
+  return ["localhost", "127.0.0.1", "192.168.1.156"].includes(normalizedHost);
+}
+
 const API_BASE_CANDIDATES = (() => {
   const candidates = [];
   const configuredApiBase = normalizeApiBaseUrl(window.NAAVAL_API_BASE_URL);
+  const allowOriginFallback = !configuredApiBase || isLocalRuntimeHost();
 
   if (configuredApiBase) {
     candidates.push(configuredApiBase);
   }
 
-  if (window.location.protocol.startsWith("http")) {
+  if (allowOriginFallback && window.location.protocol.startsWith("http")) {
     candidates.push(normalizeApiBaseUrl(window.location.origin));
   }
 
-  candidates.push("http://localhost:3001");
+  if (!configuredApiBase || isLocalRuntimeHost()) {
+    candidates.push("http://localhost:3001");
+  }
   return [...new Set(candidates.filter(Boolean))];
 })();
 
@@ -80,6 +88,9 @@ const state = {
   plansCatalog: [],
   tenants: [],
   selectedTenantId: null,
+  backofficeOverview: null,
+  selectedTenantDetail: null,
+  selectedTenantPricingConfig: null,
   optimizerSetup: buildDefaultOptimizerSetup(),
   optimizerSpreadsheetHeaders: buildDefaultOptimizerSpreadsheetHeaders(),
   optimizerDraftRows: [],
@@ -323,6 +334,15 @@ function getOpsConfigValue(key) {
 function getBooleanOpsConfigValue(key) {
   const value = getOpsConfigValue(key);
   return value === true || String(value).toLowerCase() === "true";
+}
+
+function slugify(value, fallback = "customer") {
+  const slug = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || fallback;
 }
 
 function buildFallbackDb() {
@@ -1173,6 +1193,10 @@ function labelForOpsRole(role) {
   return labels[role] ?? capitalize(role ?? "company_user");
 }
 
+function labelForTenantModule(moduleId) {
+  return state.modulesCatalog?.[moduleId]?.label ?? capitalize(String(moduleId ?? "").replaceAll("_", " "));
+}
+
 function getAdminPricingAlgoMeta(algoId) {
   return ADMIN_PRICING_ALGOS.find((algo) => algo.id === algoId) ?? ADMIN_PRICING_ALGOS[0];
 }
@@ -1571,6 +1595,7 @@ function buildAccountCustomers(customers = [], quotes = []) {
     lastActivityAt: customer.updatedAt ?? customer.createdAt ?? new Date().toISOString(),
     companyEmail: customer.companyEmail,
     companyPhone: customer.companyPhone,
+    portalPassword: customer.portalPassword ?? "demo",
     contactName: joinNameParts(customer.contactFirstName, customer.contactLastName),
     contactEmail: customer.contactEmail,
     contactPhone: customer.contactPhone,
@@ -2216,6 +2241,22 @@ function showToast(message, variant = "info") {
   }, 3200);
 }
 
+function setOpsLoginStatus(message = "", variant = "info") {
+  const node = document.querySelector("#login-status");
+  if (!node) {
+    return;
+  }
+
+  if (!message) {
+    node.textContent = "";
+    node.className = "login-status hidden";
+    return;
+  }
+
+  node.textContent = message;
+  node.className = `login-status login-status--${variant}`;
+}
+
 function openModal(name) {
   document.querySelector(`#${name}-modal`)?.classList.remove("hidden");
   if (name === "quote") {
@@ -2281,6 +2322,7 @@ function resolveEditableCustomer(customerId) {
     vatNumber: customer.vatNumber ?? "",
     companyPhone: customer.companyPhone ?? "",
     companyEmail: customer.companyEmail ?? "",
+    portalPassword: customer.portalPassword ?? "demo",
     contactFirstName,
     contactLastName: rest.join(" "),
     contactPhone: customer.contactPhone ?? "",
@@ -2316,6 +2358,9 @@ function openCustomerModal(customerId = null) {
   if (form?.elements.companyEmail) {
     form.elements.companyEmail.value = editableCustomer?.companyEmail ?? "";
   }
+  if (form?.elements.portalPassword) {
+    form.elements.portalPassword.value = editableCustomer?.portalPassword ?? "demo";
+  }
   if (form?.elements.contactFirstName) {
     form.elements.contactFirstName.value = editableCustomer?.contactFirstName ?? "";
   }
@@ -2339,6 +2384,21 @@ function openCustomerModal(customerId = null) {
   }
   setCustomerModalPresentation(isEditing);
   openModal("customer");
+}
+
+function openTenantCreateModal() {
+  const form = document.querySelector("#tenant-create-form");
+  form?.reset();
+  if (form?.elements.planId) {
+    form.elements.planId.value = "starter";
+  }
+  if (form?.elements.status) {
+    form.elements.status.value = "active";
+  }
+  if (form?.elements.temporaryPassword) {
+    form.elements.temporaryPassword.value = "demo";
+  }
+  openModal("tenant-create");
 }
 
 function setDriverModalPresentation(editing = false) {
@@ -2380,6 +2440,9 @@ function openDriverModal(driverId = null) {
   }
   if (form?.elements.phone) {
     form.elements.phone.value = driver?.phone && driver.phone !== "No phone provided" ? driver.phone : "";
+  }
+  if (form?.elements.temporaryPassword) {
+    form.elements.temporaryPassword.value = driver?.temporaryPassword ?? "demo";
   }
   if (form?.elements.skills) {
     form.elements.skills.value = (driver?.skills ?? []).join(", ");
@@ -2451,6 +2514,17 @@ function isPlatformAdmin() {
   return ["super_admin", "naaval_admin"].includes(String(state.currentUser?.role ?? "").trim());
 }
 
+function isSaasAdminMode() {
+  const search = new URLSearchParams(window.location.search);
+  const host = String(window.location.hostname ?? "").trim().toLowerCase();
+  const path = String(window.location.pathname ?? "").trim().toLowerCase();
+  return host === "admin.naaval.eu" || path === "/admin" || path.startsWith("/admin/") || search.get("mode") === "saas-admin";
+}
+
+function isBackofficeViewActive() {
+  return isSaasAdminMode() && isPlatformAdmin();
+}
+
 function getAuthHeaders(extraHeaders = {}) {
   const headers = { ...extraHeaders };
   if (state.currentUser?.token) {
@@ -2494,7 +2568,14 @@ function applyAuthenticatedSession(sessionPayload) {
     tenant: sessionPayload.tenant || null
   };
   state.tenantContext = sessionPayload.tenantContext || null;
+  if (isBackofficeViewActive()) {
+    state.activeView = "admin";
+    if (!["kpis", "customers", "algorithms", "users"].includes(state.adminSection)) {
+      state.adminSection = "kpis";
+    }
+  }
   persistSession(state.currentUser);
+  setOpsLoginStatus("");
   updateAuthUi();
 }
 
@@ -2596,21 +2677,36 @@ function setupGoogleIdentity(retryCount = 0) {
 function handleGoogleCredentialResponse(response) {
   const payload = decodeJwtPayload(response?.credential);
   if (!payload?.email) {
+    setOpsLoginStatus("Google login failed.", "error");
     showToast("Google login failed.", "error");
     return;
   }
 
   void (async () => {
     try {
-      const session = await postJson("/auth/google-ops", { email: payload.email });
+      const session = await postJson("/auth/google-ops", {
+        credential: response?.credential,
+        email: payload.email
+      });
       applyAuthenticatedSession(session);
       await refreshData();
+      setOpsLoginStatus("");
       showToast(`Google login successful for ${payload.email}.`);
     } catch (error) {
+      const prototypeProfile = findPrototypeOpsProfileByEmail(payload.email, "google_prototype");
+      if (prototypeProfile && !state.apiAvailable) {
+        loginWithProfile(prototypeProfile, "google_prototype");
+        await refreshData();
+        setOpsLoginStatus("");
+        showToast(`Google login successful for ${payload.email} (prototype mode).`);
+        return;
+      }
       if (!isTrustedOpsDomainEmail(payload.email)) {
+        setOpsLoginStatus(error.message || "This Google account is not registered as an ops user yet.", "error");
         showToast(error.message || "This Google account is not registered as an ops user yet.", "error");
         return;
       }
+      setOpsLoginStatus(error.message || "Google login failed.", "error");
       showToast(error.message || "Google login failed.", "error");
     }
   })();
@@ -2635,14 +2731,125 @@ function loginWithProfile(profile, source = "password") {
   render();
 }
 
+function getPrototypeOpsProfiles() {
+  const fallbackUsers = buildFallbackDb().opsUsers ?? [];
+  const prototypeUsers = [
+    ...fallbackUsers,
+    {
+      id: "ops_user_demo",
+      firstName: "Demo",
+      lastName: "Admin",
+      email: "demo@naaval.app",
+      role: "super_admin",
+      team: "Naaval",
+      status: "active"
+    },
+    {
+      id: "ops_user_admin",
+      firstName: "Naaval",
+      lastName: "Admin",
+      email: "admin@naaval.eu",
+      role: "naaval_admin",
+      team: "Naaval",
+      status: "active"
+    }
+  ];
+
+  const seenEmails = new Set();
+  return prototypeUsers.filter((user) => {
+    const email = String(user.email ?? "").trim().toLowerCase();
+    if (!email || seenEmails.has(email)) {
+      return false;
+    }
+    seenEmails.add(email);
+    return true;
+  });
+}
+
+function getPrototypeTenantContext() {
+  return {
+    tenant: {
+      id: "tenant_demo_transport",
+      companyId: "tenant_demo_transport",
+      slug: "blue-mile-logistics",
+      companyName: "Blue Mile Logistics",
+      status: "active",
+      planId: "trial"
+    },
+    plan: {
+      id: "trial",
+      label: "Trial",
+      monthlyPriceEur: 0
+    },
+    modules: ["orders", "drivers", "optimizer", "pricing", "inbox", "recurring_routes", "admin_users", "pricing_admin"],
+    algorithms: ["basic", "drops", "hours", "pallet"],
+    usageLimits: {
+      includedDrivers: 3,
+      includedUsers: 2,
+      includedOrdersPerMonth: 500,
+      includedRunsPerMonth: 100
+    }
+  };
+}
+
+function findPrototypeOpsProfile(email, password) {
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+  const normalizedPassword = String(password ?? "").trim();
+  if (normalizedPassword !== "demo") {
+    return null;
+  }
+
+  const user = getPrototypeOpsProfiles().find((candidate) => String(candidate.email ?? "").trim().toLowerCase() === normalizedEmail);
+  if (!user) {
+    return null;
+  }
+
+  const isInternalAdmin = user.role === "super_admin" || user.role === "naaval_admin";
+  return {
+    ...user,
+    name: joinNameParts(user.firstName, user.lastName),
+    token: `prototype:${normalizedEmail}`,
+    tenantId: isInternalAdmin ? "tenant_naaval_internal" : "tenant_demo_transport",
+    companyId: isInternalAdmin ? "tenant_naaval_internal" : "tenant_demo_transport",
+    actorType: "ops_user",
+    source: "prototype",
+    tenantContext: getPrototypeTenantContext()
+  };
+}
+
+function findPrototypeOpsProfileByEmail(email, source = "google") {
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+  const user = getPrototypeOpsProfiles().find((candidate) => String(candidate.email ?? "").trim().toLowerCase() === normalizedEmail);
+  if (!user) {
+    return null;
+  }
+
+  const isInternalAdmin = user.role === "super_admin" || user.role === "naaval_admin";
+  return {
+    ...user,
+    name: joinNameParts(user.firstName, user.lastName),
+    token: `prototype:${source}:${normalizedEmail}`,
+    tenantId: isInternalAdmin ? "tenant_naaval_internal" : "tenant_demo_transport",
+    companyId: isInternalAdmin ? "tenant_naaval_internal" : "tenant_demo_transport",
+    actorType: "ops_user",
+    source,
+    tenantContext: getPrototypeTenantContext()
+  };
+}
+
 function logout() {
   state.isAuthenticated = false;
   state.currentUser = null;
   state.tenantContext = null;
   state.tenants = [];
   state.selectedTenantId = null;
+  state.backofficeOverview = null;
+  state.selectedTenantDetail = null;
+  state.selectedTenantPricingConfig = null;
+  state.adminSection = "pricing";
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
   window.google?.accounts?.id?.disableAutoSelect?.();
+  setOpsLoginStatus("");
   updateAuthUi();
   setupGoogleIdentity();
   render();
@@ -2964,6 +3171,7 @@ function mapDomainData(db) {
       lastName: driver.lastName ?? driver.name?.split(" ").slice(1).join(" ") ?? "",
       email: driver.email ?? "",
       phone: driver.phone ?? "No phone provided",
+      temporaryPassword: driver.temporaryPassword ?? "demo",
       skills: driver.skills ?? [],
       tags: tagsForDriver(driver),
       status: activeRoute ? "active" : "idle",
@@ -3005,10 +3213,59 @@ function getDefaultHubId() {
   return state.hubs[0]?.id ?? state.orders.find((order) => order.hubId)?.hubId ?? "hub_paris_central";
 }
 
+function buildBackofficeOverviewFromState(tenants = state.tenants) {
+  const managedTenants = tenants.filter((tenant) => tenant.id !== "tenant_naaval_internal");
+  const totalMrrEur = managedTenants.reduce((sum, tenant) => sum + getTenantMonthlyRevenue(tenant), 0);
+  return {
+    signedUpCompanies: managedTenants.length,
+    tenants: managedTenants.length,
+    activeTenants: managedTenants.filter((tenant) => tenant.status === "active").length,
+    trialTenants: managedTenants.filter((tenant) => tenant.planId === "trial").length,
+    platformUsers: state.opsUsers.filter((user) => user.tenantId === "tenant_naaval_internal").length,
+    companyAdmins: state.opsUsers.filter((user) => user.role === "company_admin").length,
+    activeRoutes: state.routes.filter((route) => route.status === "in_progress" || route.status === "dispatched").length,
+    totalOrders: state.orders.length,
+    totalMrrEur
+  };
+}
+
+function getSaasPlanMeta(planId) {
+  const normalizedPlanId = String(planId ?? "").trim().toLowerCase();
+  return (
+    state.plansCatalog.find((plan) => String(plan.id ?? "").trim().toLowerCase() === normalizedPlanId) ?? {
+      trial: { id: "trial", label: "Trial", monthlyPriceEur: 0, usageLimits: { includedDrivers: 3, includedOrdersPerMonth: 500 } },
+      starter: { id: "starter", label: "Starter", monthlyPriceEur: 79, usageLimits: { includedDrivers: 3, includedOrdersPerMonth: 5000 } },
+      growth: { id: "growth", label: "Growth", monthlyPriceEur: 199, usageLimits: { includedDrivers: 15, includedOrdersPerMonth: 25000 } },
+      scale: { id: "scale", label: "Scale", monthlyPriceEur: 449, usageLimits: { includedDrivers: 75, includedOrdersPerMonth: 100000 } },
+      enterprise: { id: "enterprise", label: "Enterprise", monthlyPriceEur: 0, usageLimits: { includedDrivers: null, includedOrdersPerMonth: null } }
+    }[normalizedPlanId || "trial"] ?? {
+      id: normalizedPlanId || "trial",
+      label: capitalize(normalizedPlanId || "trial"),
+      monthlyPriceEur: 0,
+      usageLimits: {}
+    }
+  );
+}
+
+function getTenantMonthlyRevenue(tenant) {
+  const plan = getSaasPlanMeta(tenant?.planId);
+  return Number(plan?.monthlyPriceEur ?? 0) || 0;
+}
+
 async function loadFromApi() {
   const tenantContextResponse = await fetchJson("/tenant/context");
   const tenantContext = tenantContextResponse.tenantContext ?? null;
   const tenantListResponse = isPlatformAdmin() ? await fetchJson("/admin/tenants").catch(() => ({ items: [] })) : { items: [] };
+  const nextTenantId =
+    state.selectedTenantId && (tenantListResponse.items ?? []).some((tenant) => tenant.id === state.selectedTenantId)
+      ? state.selectedTenantId
+      : tenantListResponse.items?.[0]?.id ?? null;
+  const [backofficeOverviewResponse, tenantDetailResponse] = isPlatformAdmin()
+    ? await Promise.all([
+        fetchJson("/admin/backoffice/overview").catch(() => null),
+        nextTenantId ? fetchJson(`/admin/tenants/${nextTenantId}`).catch(() => null) : Promise.resolve(null)
+      ])
+    : [null, null];
   const [
     ordersResponse,
     routesResponse,
@@ -3065,10 +3322,10 @@ async function loadFromApi() {
   state.algorithmsCatalog = clone(tenantContextResponse.algorithmsCatalog ?? {});
   state.plansCatalog = clone(tenantContextResponse.plansCatalog ?? []);
   state.tenants = clone(tenantListResponse.items ?? []);
-  state.selectedTenantId =
-    state.selectedTenantId && state.tenants.some((tenant) => tenant.id === state.selectedTenantId)
-      ? state.selectedTenantId
-      : state.tenants[0]?.id ?? null;
+  state.selectedTenantId = nextTenantId;
+  state.backofficeOverview = clone(backofficeOverviewResponse ?? buildBackofficeOverviewFromState(state.tenants));
+  state.selectedTenantDetail = clone(tenantDetailResponse ?? null);
+  state.selectedTenantPricingConfig = clone(tenantDetailResponse?.pricingConfig ?? null);
   ensurePricingState();
   state.apiAvailable = true;
   state.dataMode = state.apiBaseUrl.includes(":8787") ? "Integrated Local Server" : "Live API";
@@ -3082,6 +3339,23 @@ function loadFromLocal() {
 
   mapDomainData(localDb);
   state.pricingConfig = clone(localDb.pricingConfig ?? buildDefaultPricingConfig());
+  state.tenants = clone(localDb.tenants ?? []);
+  const localManagedTenants = state.tenants.filter((tenant) => tenant.id !== "tenant_naaval_internal");
+  state.selectedTenantId =
+    state.selectedTenantId && localManagedTenants.some((tenant) => tenant.id === state.selectedTenantId)
+      ? state.selectedTenantId
+      : localManagedTenants[0]?.id ?? null;
+  state.backofficeOverview = isPlatformAdmin() ? buildBackofficeOverviewFromState(state.tenants) : null;
+  const selectedTenant = localManagedTenants.find((tenant) => tenant.id === state.selectedTenantId) ?? null;
+  state.selectedTenantDetail = selectedTenant
+    ? {
+        tenant: clone(selectedTenant),
+        pricingConfig: clone((localDb.tenantPricingConfigs ?? {})[selectedTenant.id] ?? localDb.pricingConfig ?? buildDefaultPricingConfig()),
+        tenantContext: clone(selectedTenant.tenantContext ?? null),
+        latestUsers: clone((localDb.opsUsers ?? []).filter((user) => user.tenantId === selectedTenant.id).slice(0, 10))
+      }
+    : null;
+  state.selectedTenantPricingConfig = clone(state.selectedTenantDetail?.pricingConfig ?? null);
   ensurePricingState();
   state.apiAvailable = false;
   state.dataMode = "Local Prototype";
@@ -3130,8 +3404,9 @@ function ensureSelections() {
   if (!opsUsers.some((user) => user.id === state.selectedOpsUserId)) {
     state.selectedOpsUserId = opsUsers[0]?.id ?? null;
   }
-  if (!state.tenants.some((tenant) => tenant.id === state.selectedTenantId)) {
-    state.selectedTenantId = state.tenants[0]?.id ?? null;
+  const managedTenants = getManagedTenants();
+  if (!managedTenants.some((tenant) => tenant.id === state.selectedTenantId)) {
+    state.selectedTenantId = managedTenants[0]?.id ?? null;
   }
   if (!opsUsers.some((user) => user.id === state.editingOpsUserId)) {
     state.editingOpsUserId = null;
@@ -3139,6 +3414,43 @@ function ensureSelections() {
 
   if (!inboxThreads.some((thread) => thread.id === state.selectedInboxThreadId)) {
     state.selectedInboxThreadId = inboxThreads[0]?.id ?? null;
+  }
+}
+
+async function loadSelectedTenantDetail(tenantId = state.selectedTenantId, { renderAfter = true } = {}) {
+  if (!isPlatformAdmin() || !tenantId) {
+    state.selectedTenantDetail = null;
+    state.selectedTenantPricingConfig = null;
+    if (renderAfter) {
+      render();
+    }
+    return;
+  }
+
+  if (state.apiAvailable) {
+    try {
+      const detail = await fetchJson(`/admin/tenants/${tenantId}`);
+      state.selectedTenantDetail = clone(detail ?? null);
+      state.selectedTenantPricingConfig = clone(detail?.pricingConfig ?? null);
+    } catch (error) {
+      showToast(`Unable to load client detail: ${error.message}`, "error");
+      return;
+    }
+  } else {
+    const tenant = state.tenants.find((candidate) => candidate.id === tenantId) ?? null;
+    state.selectedTenantDetail = tenant
+      ? {
+          tenant: clone(tenant),
+          pricingConfig: clone((localDb?.tenantPricingConfigs ?? {})[tenantId] ?? localDb?.pricingConfig ?? buildDefaultPricingConfig()),
+          tenantContext: clone(tenant.tenantContext ?? null),
+          latestUsers: clone((localDb?.opsUsers ?? []).filter((user) => user.tenantId === tenantId).slice(0, 10))
+        }
+      : null;
+    state.selectedTenantPricingConfig = clone(state.selectedTenantDetail?.pricingConfig ?? null);
+  }
+
+  if (renderAfter) {
+    render();
   }
 }
 
@@ -3434,20 +3746,75 @@ function syncFormDefaults() {
   ensureDropoffSections("#recurring-dropoff-list", "remove-recurring-drop");
 }
 
+function renderPrimaryCta() {
+  const primaryCta = document.querySelector("#sidebar-primary-cta");
+  const primaryCtaLabel = document.querySelector("#sidebar-primary-cta-label");
+  if (!primaryCta || !primaryCtaLabel) {
+    return;
+  }
+
+  if (isSaasAdminMode() && !isPlatformAdmin()) {
+    primaryCta.setAttribute("data-action", "open-live-ops");
+    primaryCta.removeAttribute("data-open-modal");
+    primaryCtaLabel.textContent = "Ops Dashboard";
+    return;
+  }
+
+  if (isBackofficeViewActive()) {
+    primaryCta.setAttribute("data-action", "open-backoffice-create-tenant");
+    primaryCta.removeAttribute("data-open-modal");
+    primaryCtaLabel.textContent = "New Customer";
+    return;
+  }
+
+  primaryCta.setAttribute("data-open-modal", "order");
+  primaryCta.removeAttribute("data-action");
+  primaryCtaLabel.textContent = "New Order";
+}
+
 function renderNav() {
+  const adminShellOnly = isSaasAdminMode();
   for (const button of document.querySelectorAll("[data-view]")) {
     const view = button.getAttribute("data-view");
     const moduleId = VIEW_MODULE_REQUIREMENTS[view];
     const canSeeView =
-      view === "admin"
-        ? state.currentUser?.actorType === "ops_user" && String(state.currentUser?.role ?? "") !== "company_user"
-        : !moduleId || isModuleEnabled(moduleId);
+      adminShellOnly && view !== "admin"
+        ? false
+        : view === "admin"
+          ? adminShellOnly && state.currentUser?.actorType === "ops_user" && String(state.currentUser?.role ?? "") !== "company_user"
+          : !moduleId || isModuleEnabled(moduleId);
+    const label = button.querySelector("span:last-child");
+    if (label && view === "admin") {
+      label.textContent = adminShellOnly ? "SaaS Admin" : "Admin";
+    }
     button.classList.toggle("hidden", !canSeeView);
     button.classList.toggle("nav__item--active", canSeeView && view === state.activeView);
   }
 }
 
 function renderMetrics() {
+  if (isBackofficeViewActive()) {
+    const overview = state.backofficeOverview ?? {};
+    document.querySelector("#metric-orders-label").textContent = "Signed Up";
+    document.querySelector("#metric-ready-label").textContent = "Active Clients";
+    document.querySelector("#metric-drivers-label").textContent = "Company Admins";
+    document.querySelector("#metric-routes-label").textContent = "Active Routes";
+    document.querySelector("#metric-revenue-label").textContent = "MRR";
+    document.querySelector("#metric-orders").textContent = String(overview.signedUpCompanies ?? overview.tenants ?? 0);
+    document.querySelector("#metric-ready").textContent = String(overview.activeTenants ?? 0);
+    document.querySelector("#metric-drivers").textContent = String(overview.companyAdmins ?? 0);
+    document.querySelector("#metric-routes").textContent = String(overview.activeRoutes ?? 0);
+    document.querySelector("#metric-revenue").textContent = formatCurrency(overview.totalMrrEur ?? 0);
+    document.querySelector("#data-mode").textContent = state.apiAvailable ? "SaaS Backoffice" : state.dataMode;
+    document.querySelector("#solver-mode").textContent = "Naaval Admin";
+    const sessionMode = document.querySelector("#session-mode");
+    if (sessionMode) {
+      sessionMode.textContent = state.isAuthenticated ? `${String(state.currentUser?.source ?? "").startsWith("google") ? "Google" : "Admin"} Session` : "Locked";
+    }
+    document.querySelector("#logout-button")?.classList.toggle("hidden", !state.isAuthenticated);
+    return;
+  }
+
   const visibleOrders = getVisibleOrders();
   const readyOrders = visibleOrders.filter((order) => !order.routeId && (order.sourceStatus === "ready" || order.sourceStatus === "planned")).length;
   const liveRoutes = getVisibleRoutes().filter((route) => route.status !== "completed" && route.status !== "cancelled").length;
@@ -3455,6 +3822,11 @@ function renderMetrics() {
     .filter((order) => (order.sourceStatus ?? order.status) !== "failed")
     .reduce((total, order) => total + order.amount, 0);
 
+  document.querySelector("#metric-orders-label").textContent = "Orders";
+  document.querySelector("#metric-ready-label").textContent = "Ready To Plan";
+  document.querySelector("#metric-drivers-label").textContent = "Drivers";
+  document.querySelector("#metric-routes-label").textContent = "Live Routes";
+  document.querySelector("#metric-revenue-label").textContent = "Daily Revenue";
   document.querySelector("#metric-orders").textContent = String(visibleOrders.length);
   document.querySelector("#metric-ready").textContent = String(readyOrders);
   document.querySelector("#metric-drivers").textContent = String(state.drivers.length);
@@ -3471,6 +3843,27 @@ function renderMetrics() {
 
 function renderToolbar() {
   const toolbar = document.querySelector("#toolbar-actions");
+
+  if (isSaasAdminMode() && !isPlatformAdmin()) {
+    toolbar.innerHTML = `
+      <button class="ghost-button" type="button" data-action="logout">Switch Account</button>
+      <button class="solid-button" type="button" data-action="open-live-ops">Open Ops Dashboard</button>
+    `;
+    return;
+  }
+
+  if (isBackofficeViewActive() && state.activeView === "admin") {
+    toolbar.innerHTML =
+      state.adminSection === "customers"
+        ? `
+            <button class="ghost-button" type="button" data-action="refresh">Refresh</button>
+            <button class="solid-button" type="button" data-action="open-backoffice-create-tenant">New Customer</button>
+          `
+        : `
+            <button class="ghost-button" type="button" data-action="refresh">Refresh</button>
+          `;
+    return;
+  }
 
   if (state.activeView === "orders") {
     toolbar.innerHTML = `
@@ -3546,6 +3939,41 @@ function renderPanelHeader() {
   const eyebrow = document.querySelector("#panel-eyebrow");
   const title = document.querySelector("#panel-title");
   const subtitle = document.querySelector("#panel-subtitle");
+
+  if (isSaasAdminMode() && !isPlatformAdmin()) {
+    eyebrow.textContent = "Naaval SaaS";
+    title.textContent = "Restricted back-office";
+    subtitle.textContent = "This admin URL is reserved for Naaval internal roles. Use a Naaval admin account here, or switch back to the operations dashboard.";
+    return;
+  }
+
+  if (isBackofficeViewActive() && state.activeView === "admin") {
+    if (state.adminSection === "kpis") {
+      eyebrow.textContent = "Naaval SaaS";
+      title.textContent = "Naaval KPI";
+      subtitle.textContent = "Track signups, active clients, platform revenue, and operational activity across the full Naaval customer base.";
+      return;
+    }
+
+    if (state.adminSection === "customers") {
+      eyebrow.textContent = "Naaval SaaS";
+      title.textContent = "Customers";
+      subtitle.textContent = "See the full list of client companies onboarded on Naaval, then open each account to inspect its setup in detail.";
+      return;
+    }
+
+    if (state.adminSection === "algorithms") {
+      eyebrow.textContent = "Naaval SaaS";
+      title.textContent = "Client Algorithms";
+      subtitle.textContent = "Configure pricing algorithms per tenant and push commercial overrides directly from the central Naaval back-office.";
+      return;
+    }
+
+    eyebrow.textContent = "Naaval SaaS";
+    title.textContent = "Platform Users";
+    subtitle.textContent = "Manage Naaval internal admins and company-level operations users from the central back-office.";
+    return;
+  }
 
   if (state.activeView === "orders") {
     eyebrow.textContent = "Operations";
@@ -3992,6 +4420,7 @@ function renderDriverDetail(driver) {
           <h4>Profile</h4>
           <div class="detail-list">
             <div class="detail-row"><span>Email</span><strong>${escapeHtml(driver.email || "Not provided")}</strong></div>
+            <div class="detail-row"><span>App Password</span><strong>${escapeHtml(driver.temporaryPassword || "demo")}</strong></div>
             <div class="detail-row"><span>Phone</span><strong>${escapeHtml(driver.phone)}</strong></div>
             <div class="detail-row"><span>Vehicle</span><strong>${escapeHtml(driver.vehicleTypeLabel)}</strong></div>
             <div class="detail-row"><span>Carrier Company</span><strong>${escapeHtml(driver.carrierCompanyName)}</strong></div>
@@ -4126,6 +4555,10 @@ function renderCustomersView() {
 }
 
 function renderCustomerDetail(customer) {
+  const accountCustomer = state.accountCustomers.find((candidate) => candidate.id === customer.id) ?? null;
+  const portalLoginEmail = accountCustomer?.contactEmail || accountCustomer?.companyEmail || customer.contactEmail || customer.companyEmail || "Not provided";
+  const portalPassword = accountCustomer?.portalPassword || customer.portalPassword || "demo";
+
   return `
     <article class="detail-card">
       <header class="detail-card__header">
@@ -4144,6 +4577,8 @@ function renderCustomerDetail(customer) {
             <div class="detail-row"><span>Main Address</span><strong>${escapeHtml(customer.addressLabel)}</strong></div>
             <div class="detail-row"><span>Contact</span><strong>${escapeHtml(customer.contactName || "Not provided")}</strong></div>
             <div class="detail-row"><span>Contact Email</span><strong>${escapeHtml(customer.contactEmail || "Not provided")}</strong></div>
+            <div class="detail-row"><span>Portal Login</span><strong>${escapeHtml(portalLoginEmail)}</strong></div>
+            <div class="detail-row"><span>Portal Password</span><strong>${escapeHtml(portalPassword)}</strong></div>
             <div class="detail-row"><span>VAT</span><strong>${escapeHtml(customer.vatNumber || "Not provided")}</strong></div>
             <div class="detail-row"><span>Total Orders</span><strong>${customer.orderCount}</strong></div>
             <div class="detail-row"><span>Preferred Courier</span><strong>${escapeHtml(customer.preferredCourier)}</strong></div>
@@ -6424,7 +6859,7 @@ function renderPricingView() {
   `;
 }
 
-function summarizeAdminPricingAlgo(algoId, config = getPricingConfig()) {
+function summarizeAdminPricingAlgo(algoId, config = getAdminPricingTargetConfig()) {
   if (algoId === "basic") {
     return [
       `${formatCurrency(config.basic.distanceRatePerKm)} / km`,
@@ -6457,7 +6892,7 @@ function summarizeAdminPricingAlgo(algoId, config = getPricingConfig()) {
 }
 
 function renderAdminPricingCard(algo) {
-  const summary = summarizeAdminPricingAlgo(algo.id);
+  const summary = summarizeAdminPricingAlgo(algo.id, getAdminPricingTargetConfig());
 
   return `
     <button class="admin-algo-card" type="button" data-action="open-admin-pricing-algo" data-algo-id="${algo.id}">
@@ -6471,8 +6906,13 @@ function renderAdminPricingCard(algo) {
   `;
 }
 
+function getManagedTenants() {
+  return state.tenants.filter((tenant) => tenant.id !== "tenant_naaval_internal");
+}
+
 function selectedTenantRecord() {
-  return state.tenants.find((tenant) => tenant.id === state.selectedTenantId) ?? state.tenants[0] ?? null;
+  const tenants = getManagedTenants();
+  return tenants.find((tenant) => tenant.id === state.selectedTenantId) ?? tenants[0] ?? null;
 }
 
 function renderTenantAdminCard(tenant) {
@@ -6480,7 +6920,7 @@ function renderTenantAdminCard(tenant) {
   const algorithmsEnabled = (tenant.tenantContext?.algorithms ?? []).length;
 
   return `
-    <button class="admin-user-row__main admin-tenant-row" type="button" data-action="select-tenant" data-tenant-id="${tenant.id}">
+    <button class="admin-user-row__main admin-tenant-row ${tenant.id === state.selectedTenantId ? "admin-tenant-row--active" : ""}" type="button" data-action="select-tenant" data-tenant-id="${tenant.id}">
       <div>
         <p class="route-card__title">${escapeHtml(tenant.companyName || tenant.displayName || tenant.id)}</p>
         <div class="route-card__meta">
@@ -6497,8 +6937,390 @@ function renderTenantAdminCard(tenant) {
   `;
 }
 
+function selectedTenantDetailRecord() {
+  return state.selectedTenantDetail?.tenant?.id === state.selectedTenantId ? state.selectedTenantDetail : null;
+}
+
+function getAdminPricingTargetConfig() {
+  if (isBackofficeViewActive()) {
+    return clone(state.selectedTenantPricingConfig ?? state.selectedTenantDetail?.pricingConfig ?? getPricingConfig());
+  }
+  return clone(getPricingConfig());
+}
+
+function renderBackofficeOverviewSection() {
+  const overview = state.backofficeOverview ?? {};
+  const managedTenants = getManagedTenants();
+  const tenantsMarkup =
+    managedTenants.length > 0
+      ? managedTenants
+          .slice()
+          .sort((left, right) => new Date(right.createdAt ?? 0).getTime() - new Date(left.createdAt ?? 0).getTime())
+          .slice(0, 6)
+          .map((tenant) => renderBackofficeTenantCard(tenant, { action: "open-tenant-detail" }))
+          .join("")
+      : `<div class="placeholder-card"><div><h3>No customers yet</h3><p>New transport companies created from signup or from the back-office will appear here automatically.</p></div></div>`;
+
+  return `
+    <section class="admin-card">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">KPI</p>
+          <h3>Naaval business overview</h3>
+          <p class="panel__subtitle">Monitor signups, active accounts, recurring revenue, and recent customer activity across the SaaS platform.</p>
+        </div>
+      </div>
+
+      <div class="backoffice-kpi-grid">
+        <article class="backoffice-kpi-card">
+          <span>Signed up</span>
+          <strong>${overview.signedUpCompanies ?? overview.tenants ?? 0}</strong>
+        </article>
+        <article class="backoffice-kpi-card">
+          <span>Active clients</span>
+          <strong>${overview.activeTenants ?? 0}</strong>
+        </article>
+        <article class="backoffice-kpi-card">
+          <span>Trials</span>
+          <strong>${overview.trialTenants ?? 0}</strong>
+        </article>
+        <article class="backoffice-kpi-card">
+          <span>MRR</span>
+          <strong>${formatCurrency(overview.totalMrrEur ?? 0)}</strong>
+        </article>
+        <article class="backoffice-kpi-card">
+          <span>Company admins</span>
+          <strong>${overview.companyAdmins ?? 0}</strong>
+        </article>
+        <article class="backoffice-kpi-card">
+          <span>Orders processed</span>
+          <strong>${overview.totalOrders ?? 0}</strong>
+        </article>
+      </div>
+
+      <div class="admin-card admin-card--nested">
+        <div class="form-section__header">
+          <div>
+            <p class="eyebrow">Recent Customers</p>
+            <h4>Latest signups and managed accounts</h4>
+          </div>
+        </div>
+        <div class="admin-user-list">
+          ${tenantsMarkup}
+        </div>
+      </div>
+
+      <div class="admin-card admin-card--nested">
+        <div class="form-section__header">
+          <div>
+            <p class="eyebrow">Carrier App</p>
+            <h4>Enterprise mobile onboarding</h4>
+          </div>
+        </div>
+        <div class="detail-list">
+          <div class="detail-row">
+            <span>Installation guidance</span>
+            <strong>Naaval Carrier App est une véritable application mobile d’entreprise. Ce n’est pas un raccourci web. Sur iPhone, il peut être nécessaire d’approuver le profil développeur dans les réglages avant de pouvoir ouvrir l’application.</strong>
+          </div>
+          <div class="detail-row"><span>Validation path</span><strong>Réglages &gt; Général &gt; VPN et gestion de l’appareil</strong></div>
+          <div class="detail-row"><span>Distribution target</span><strong>Private / enterprise iOS app distribution</strong></div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderBackofficeTenantCard(tenant, { action = "open-tenant-detail" } = {}) {
+  return `
+    <button class="backoffice-tenant-card" type="button" data-action="${action}" data-tenant-id="${tenant.id}">
+      <div>
+        <strong>${escapeHtml(tenant.companyName || tenant.displayName || tenant.id)}</strong>
+        <span>${escapeHtml(capitalize(tenant.planId || "trial"))} · ${escapeHtml(capitalize(tenant.status || "active"))}</span>
+      </div>
+      <div class="backoffice-tenant-card__stats">
+        <span>📦 ${tenant.ordersCount ?? 0}</span>
+        <span>🚚 ${tenant.driversCount ?? 0}</span>
+        <span>👥 ${tenant.opsUsersCount ?? 0}</span>
+      </div>
+    </button>
+  `;
+}
+
+function renderBackofficeCustomersSection() {
+  const managedTenants = getManagedTenants();
+  return `
+    <section class="admin-card">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">Customers</p>
+          <h3>Client companies</h3>
+          <p class="panel__subtitle">Open a customer account to inspect its plan, modules, algorithms, limits, and first admin setup in a dedicated modal.</p>
+        </div>
+      </div>
+
+      <div class="admin-user-list">
+        ${
+          managedTenants.length > 0
+            ? managedTenants
+                .slice()
+                .sort((left, right) => String(left.companyName ?? "").localeCompare(String(right.companyName ?? "")))
+                .map((tenant) => renderBackofficeTenantCard(tenant, { action: "open-tenant-detail" }))
+                .join("")
+            : `<div class="placeholder-card"><div><h3>No customers yet</h3><p>Create your first client company to start managing plans, modules, and pricing access from Naaval admin.</p></div></div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderBackofficeTenantDetailModal() {
+  const content = document.querySelector("#tenant-detail-modal-content");
+  if (!content) {
+    return;
+  }
+
+  const detail = selectedTenantDetailRecord();
+  const tenant = detail?.tenant ?? selectedTenantRecord();
+  if (!tenant) {
+    content.innerHTML = `<div class="placeholder-card"><div><h3>No customer selected</h3><p>Select a customer from the list to inspect its full setup.</p></div></div>`;
+    return;
+  }
+
+  const context = detail?.tenantContext ?? tenant.tenantContext ?? {};
+  const latestUsers = detail?.latestUsers ?? [];
+  const modules = new Set(context.modules ?? []);
+  const algorithms = new Set(context.algorithms ?? []);
+  const moduleEntries = Object.entries(state.modulesCatalog ?? {});
+  const algorithmEntries = Object.entries(state.algorithmsCatalog ?? {});
+  const plan = getSaasPlanMeta(tenant.planId);
+  const signupMeta = tenant.signupMeta ?? {};
+
+  content.innerHTML = `
+    <p class="eyebrow">Customers</p>
+    <h3 class="modal__title">Customer Detail</h3>
+    <p class="modal__subtitle">Manage this client’s plan, visible modules, accessible algorithms, usage limits, and first admin access from one place.</p>
+
+    <article class="detail-card">
+      <header class="detail-card__header">
+        <div>
+          <p class="eyebrow">Company</p>
+          <h3>${escapeHtml(tenant.companyName || tenant.displayName || tenant.id)}</h3>
+        </div>
+        <span class="status-chip" data-status="${tenant.status === "active" ? "active" : tenant.status === "trial" ? "upcoming" : "idle"}">${escapeHtml(capitalize(tenant.status || "active"))}</span>
+      </header>
+
+      <div class="detail-grid">
+        <section class="detail-section">
+          <h4>Business Snapshot</h4>
+          <div class="detail-list">
+            <div class="detail-row"><span>Plan</span><strong>${escapeHtml(plan.label ?? capitalize(tenant.planId || "trial"))}</strong></div>
+            <div class="detail-row"><span>Monthly Revenue</span><strong>${formatCurrency(getTenantMonthlyRevenue(tenant))}</strong></div>
+            <div class="detail-row"><span>Workspace</span><strong>${escapeHtml(tenant.slug || "—")}</strong></div>
+            <div class="detail-row"><span>Orders</span><strong>${tenant.ordersCount ?? 0}</strong></div>
+            <div class="detail-row"><span>Drivers</span><strong>${tenant.driversCount ?? 0}</strong></div>
+            <div class="detail-row"><span>Ops Users</span><strong>${tenant.opsUsersCount ?? 0}</strong></div>
+            <div class="detail-row"><span>Admin Email</span><strong>${escapeHtml(signupMeta.createdByEmail || latestUsers[0]?.email || "Not provided")}</strong></div>
+            <div class="detail-row"><span>Admin Phone</span><strong>${escapeHtml(signupMeta.phone || latestUsers[0]?.phone || "Not provided")}</strong></div>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <h4>Current Access</h4>
+          <div class="route-card__meta">
+            ${(context.modules ?? []).map((moduleId) => `<span class="mini-chip">${escapeHtml(labelForTenantModule(moduleId))}</span>`).join("") || `<span class="mini-chip">No module enabled</span>`}
+          </div>
+          <div class="route-card__meta">
+            ${(context.algorithms ?? []).map((algorithmId) => `<span class="mini-chip">${escapeHtml(getAlgorithmLabel(algorithmId))}</span>`).join("") || `<span class="mini-chip">No algorithm enabled</span>`}
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <h4>Carrier App Onboarding</h4>
+          <p class="panel__subtitle">Naaval Carrier App est une véritable application mobile d’entreprise. Ce n’est pas un raccourci web. Sur iPhone, il peut être nécessaire d’approuver le profil développeur dans les réglages avant de pouvoir ouvrir l’application.</p>
+          <div class="detail-list">
+            <div class="detail-row"><span>iPhone validation</span><strong>Réglages &gt; Général &gt; VPN et gestion de l’appareil</strong></div>
+            <div class="detail-row"><span>Distribution mode</span><strong>Application privée / entreprise iOS</strong></div>
+          </div>
+        </section>
+      </div>
+
+      <form id="tenant-form" class="admin-form-stack">
+        <input type="hidden" name="tenantId" value="${escapeHtml(tenant.id)}" />
+        <div class="form-grid">
+          <label class="field">
+            <span>Company Name</span>
+            <input name="companyName" value="${escapeHtml(tenant.companyName ?? "")}" required />
+          </label>
+          <label class="field">
+            <span>Display Name</span>
+            <input name="displayName" value="${escapeHtml(tenant.displayName ?? tenant.companyName ?? "")}" />
+          </label>
+          <label class="field">
+            <span>Plan</span>
+            <select name="planId">
+              ${[
+                ["trial", "Trial"],
+                ["starter", "Starter"],
+                ["growth", "Growth"],
+                ["scale", "Scale"],
+                ["enterprise", "Enterprise"]
+              ]
+                .map(([planId, label]) => `<option value="${planId}" ${tenant.planId === planId ? "selected" : ""}>${label}</option>`)
+                .join("")}
+            </select>
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select name="status">
+              ${["trial", "active", "paused", "disabled"]
+                .map((status) => `<option value="${status}" ${tenant.status === status ? "selected" : ""}>${capitalize(status)}</option>`)
+                .join("")}
+            </select>
+          </label>
+        </div>
+
+        <section class="form-section">
+          <div class="form-section__header">
+            <div><p class="eyebrow">Modules</p><h4>Visible Modules</h4></div>
+          </div>
+          <div class="toggle-grid">
+            ${moduleEntries
+              .map(
+                ([moduleId, meta]) => `
+                  <label class="toggle-row">
+                    <span>${escapeHtml(meta.label ?? moduleId)}</span>
+                    <input type="checkbox" name="moduleOverride_${moduleId}" ${modules.has(moduleId) ? "checked" : ""} />
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+
+        <section class="form-section">
+          <div class="form-section__header">
+            <div><p class="eyebrow">Algorithms</p><h4>Accessible Algorithms</h4></div>
+          </div>
+          <div class="toggle-grid">
+            ${algorithmEntries
+              .map(
+                ([algorithmId, meta]) => `
+                  <label class="toggle-row">
+                    <span>${escapeHtml(meta.label ?? algorithmId)}</span>
+                    <input type="checkbox" name="algorithmOverride_${algorithmId}" ${algorithms.has(algorithmId) ? "checked" : ""} />
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Included Drivers</span>
+            <input name="usageDrivers" type="number" min="0" value="${escapeHtml(String(context.usageLimits?.drivers ?? context.usageLimits?.includedDrivers ?? 0))}" />
+          </label>
+          <label class="field">
+            <span>Included Orders / Month</span>
+            <input name="usageOrders" value="${escapeHtml(String(context.usageLimits?.ordersPerMonth ?? context.usageLimits?.includedOrdersPerMonth ?? ""))}" />
+          </label>
+        </div>
+
+        <section class="form-section">
+          <div class="form-section__header">
+            <div><p class="eyebrow">Users</p><h4>Existing Access</h4></div>
+          </div>
+          <div class="admin-user-list">
+            ${
+              latestUsers.length > 0
+                ? latestUsers
+                    .map(
+                      (user) => `
+                        <div class="admin-user-row">
+                          <div>
+                            <p class="route-card__title">${escapeHtml(joinNameParts(user.firstName, user.lastName) || user.email)}</p>
+                            <div class="route-card__meta">
+                              <span>${escapeHtml(user.email)}</span>
+                              <span>${escapeHtml(labelForOpsRole(user.role || "company_user"))}</span>
+                            </div>
+                          </div>
+                        </div>
+                      `
+                    )
+                    .join("")
+                : `<div class="placeholder-card"><div><h3>No ops users yet</h3><p>This customer has no account users yet.</p></div></div>`
+            }
+          </div>
+        </section>
+
+        <div class="form-actions admin-actions">
+          <button class="ghost-button" type="button" data-close-modal="tenant-detail">Close</button>
+          <button class="solid-button" type="submit">Save Customer Setup</button>
+        </div>
+      </form>
+    </article>
+  `;
+}
+
+function renderBackofficeAlgorithmsSection() {
+  const tenant = selectedTenantRecord();
+  const detail = selectedTenantDetailRecord();
+  const config = getAdminPricingTargetConfig();
+  const managedTenants = getManagedTenants();
+
+  return `
+    <section class="admin-card">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">Algorithms</p>
+          <h3>Client pricing setup</h3>
+          <p class="panel__subtitle">Pick a client company, inspect its accessible algorithms, then edit its tenant-specific pricing coefficients.</p>
+        </div>
+      </div>
+
+      <div class="admin-grid">
+        <div class="route-list admin-user-list">
+          ${managedTenants.length > 0 ? managedTenants.map((item) => renderTenantAdminCard(item)).join("") : `<div class="placeholder-card"><div><h3>No tenants yet</h3><p>Create or sign up a company first to configure its pricing stack.</p></div></div>`}
+        </div>
+
+        <div class="admin-card admin-card--nested">
+          ${
+            tenant
+              ? `
+                <div class="form-section">
+                  <div class="form-section__header">
+                    <div>
+                      <p class="eyebrow">Target tenant</p>
+                      <h4>${escapeHtml(tenant.companyName || tenant.displayName || tenant.id)}</h4>
+                    </div>
+                    <span class="mini-chip">${escapeHtml(capitalize(tenant.planId || "trial"))}</span>
+                  </div>
+                  <div class="optimizer-summary-ribbon">
+                    ${((detail?.tenantContext ?? tenant.tenantContext)?.algorithms ?? []).map((algoId) => `<span class="mini-chip">${escapeHtml(getAlgorithmLabel(algoId))}</span>`).join("")}
+                  </div>
+                  <div class="optimizer-kv-list">
+                    <div><span>Default distance rate</span><strong>${formatCurrency(config.basic.distanceRatePerKm)} / km</strong></div>
+                    <div><span>Pallet price</span><strong>${formatCurrency(config.pallet.pricePerPallet)} / pallet</strong></div>
+                    <div><span>Hourly 3m3</span><strong>${formatCurrency(config.hours.vehicleHourlyRates.van_3m3)} / h</strong></div>
+                    <div><span>Drop 3m3</span><strong>${formatCurrency(config.drops.vehicleDropRates.van_3m3)} / drop</strong></div>
+                  </div>
+                </div>
+
+                <div class="admin-algo-list">
+                  ${ADMIN_PRICING_ALGOS.map((algo) => renderAdminPricingCard(algo)).join("")}
+                </div>
+              `
+              : `<div class="placeholder-card"><div><h3>No client selected</h3><p>Select a company to edit the pricing algorithms that power its customer-facing and ops-facing tools.</p></div></div>`
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderTenantAdminSection() {
   const tenant = selectedTenantRecord();
+  const managedTenants = getManagedTenants();
   const planOptions = [
     ["trial", "Trial"],
     ["starter", "Starter"],
@@ -6510,8 +7332,8 @@ function renderTenantAdminSection() {
   const algorithmEntries = Object.entries(state.algorithmsCatalog ?? {});
 
   const tenantListMarkup =
-    state.tenants.length > 0
-      ? state.tenants.map((item) => renderTenantAdminCard(item)).join("")
+    managedTenants.length > 0
+      ? managedTenants.map((item) => renderTenantAdminCard(item)).join("")
       : `<div class="placeholder-card"><div><h3>No tenants yet</h3><p>New companies created from signup will appear here automatically.</p></div></div>`;
 
   const moduleToggles = tenant
@@ -6630,7 +7452,187 @@ function renderTenantAdminSection() {
   `;
 }
 
+function renderOpsUsersAdminSection(editingOpsUser, roleOptions, { title = "Create Ops Accounts", eyebrow = "User", subtitle = "Create operations accounts and review current ops users." } = {}) {
+  const usersMarkup =
+    state.opsUsers.length > 0
+      ? state.opsUsers
+          .map(
+            (user) => `
+              <div class="admin-user-row">
+                <button class="admin-user-row__main" type="button" data-action="open-ops-user-detail" data-ops-user-id="${user.id}">
+                  <div>
+                    <p class="route-card__title">${escapeHtml(`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || user.email)}</p>
+                    <div class="route-card__meta">
+                      <span>${escapeHtml(user.email)}</span>
+                      <span>${escapeHtml(user.team ?? "Operations")}</span>
+                    </div>
+                  </div>
+                  <span class="status-chip" data-status="${user.status === "active" ? "active" : "idle"}">${escapeHtml(labelForOpsRole(user.role))}</span>
+                </button>
+                <button class="ghost-button admin-user-row__delete" type="button" data-action="delete-ops-user" data-ops-user-id="${user.id}">Delete User</button>
+              </div>
+            `
+          )
+          .join("")
+      : `<div class="placeholder-card"><div><h3>No ops users yet</h3><p>Create the first operations account from this admin section.</p></div></div>`;
+
+  return `
+    <section class="admin-card">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+          <h3>${escapeHtml(editingOpsUser ? "Edit Ops Account" : title)}</h3>
+          <p class="panel__subtitle">${escapeHtml(subtitle)}</p>
+        </div>
+      </div>
+
+      <form id="ops-user-form" class="admin-form-stack">
+        <input type="hidden" name="userId" value="${escapeHtml(editingOpsUser?.id ?? "")}" />
+        <div class="form-grid">
+          <label class="field">
+            <span>First Name</span>
+            <input name="firstName" placeholder="Amina" value="${escapeHtml(editingOpsUser?.firstName ?? "")}" required />
+          </label>
+          <label class="field">
+            <span>Last Name</span>
+            <input name="lastName" placeholder="Laurent" value="${escapeHtml(editingOpsUser?.lastName ?? "")}" required />
+          </label>
+          <label class="field">
+            <span>Email</span>
+            <input name="email" type="email" placeholder="ops@naaval.app" value="${escapeHtml(editingOpsUser?.email ?? "")}" required />
+          </label>
+          <label class="field">
+            <span>Role</span>
+            <select name="role">
+              ${roleOptions.map(([value, label]) => `<option value="${value}" ${editingOpsUser?.role === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <label class="field">
+            <span>Team</span>
+            <input name="team" placeholder="Operations" value="${escapeHtml(editingOpsUser?.team ?? "")}" />
+          </label>
+          <label class="field">
+            <span>Temporary Password</span>
+            <input name="temporaryPassword" placeholder="demo" value="${escapeHtml(editingOpsUser?.temporaryPassword ?? "")}" />
+          </label>
+        </div>
+
+        <div class="form-actions admin-actions">
+          ${editingOpsUser ? `<button class="ghost-button" type="button" data-action="cancel-edit-ops-user">Cancel</button>` : ""}
+          <button class="solid-button" type="submit">${editingOpsUser ? "Save Ops User" : "Create Ops User"}</button>
+        </div>
+      </form>
+
+      <section class="form-section">
+        <div class="form-section__header">
+          <div><p class="eyebrow">Existing Users</p><h4>Ops user directory</h4></div>
+        </div>
+        <div class="admin-user-list">
+          ${usersMarkup}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderSaasAdminView() {
+  const editingOpsUser = state.editingOpsUserId ? state.opsUsers.find((candidate) => candidate.id === state.editingOpsUserId) : null;
+  const roleOptions = [
+    ["super_admin", "Super Admin"],
+    ["naaval_admin", "Naaval Admin"],
+    ["company_admin", "Company Admin"],
+    ["company_user", "Company User"]
+  ];
+
+  return `
+    <div class="admin-layout admin-layout--saas">
+      <div class="admin-menu admin-menu--saas">
+        <button class="admin-menu__item ${state.adminSection === "kpis" ? "admin-menu__item--active" : ""}" type="button" data-action="set-admin-section" data-admin-section="kpis">
+          <strong>KPI</strong>
+          <span>Platform revenue, signups, and client activity.</span>
+        </button>
+        <button class="admin-menu__item ${state.adminSection === "customers" ? "admin-menu__item--active" : ""}" type="button" data-action="set-admin-section" data-admin-section="customers">
+          <strong>Customers</strong>
+          <span>Client company list and full setup modals.</span>
+        </button>
+        <button class="admin-menu__item ${state.adminSection === "algorithms" ? "admin-menu__item--active" : ""}" type="button" data-action="set-admin-section" data-admin-section="algorithms">
+          <strong>Algorithms</strong>
+          <span>Pricing coefficients and algorithm access per client.</span>
+        </button>
+        <button class="admin-menu__item ${state.adminSection === "users" ? "admin-menu__item--active" : ""}" type="button" data-action="set-admin-section" data-admin-section="users">
+          <strong>Users</strong>
+          <span>Naaval admins and company-level ops accounts.</span>
+        </button>
+      </div>
+
+      <div class="admin-content">
+        ${
+          state.adminSection === "kpis"
+            ? renderBackofficeOverviewSection()
+            : state.adminSection === "customers"
+              ? renderBackofficeCustomersSection()
+              : state.adminSection === "algorithms"
+                ? renderBackofficeAlgorithmsSection()
+                : renderOpsUsersAdminSection(editingOpsUser, roleOptions, {
+                    title: "Manage platform and client users",
+                    eyebrow: "Users",
+                    subtitle: "Create or edit internal Naaval admins and company-level ops users from the central back-office."
+                  })
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderSaasAdminAccessDeniedView() {
+  return `
+    <section class="admin-card admin-card--access">
+      <div class="admin-card__header">
+        <div>
+          <p class="eyebrow">Naaval SaaS Admin</p>
+          <h3>Back-office access required</h3>
+          <p class="panel__subtitle">This URL is reserved for Naaval internal admins. Sign in with a <code>super_admin</code> or <code>naaval_admin</code> account to manage clients, plans, modules, and pricing overrides.</p>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-grid">
+          <section class="detail-section">
+            <h4>Current session</h4>
+            <div class="detail-list">
+              <div class="detail-row"><span>Name</span><strong>${escapeHtml(state.currentUser?.name || "Unknown user")}</strong></div>
+              <div class="detail-row"><span>Email</span><strong>${escapeHtml(state.currentUser?.email || "Not available")}</strong></div>
+              <div class="detail-row"><span>Role</span><strong>${escapeHtml(labelForOpsRole(state.currentUser?.role || "company_user"))}</strong></div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <h4>How to access the SaaS admin</h4>
+            <div class="detail-list">
+              <div class="detail-row"><span>Recommended demo admin</span><strong>pierre@naaval.app / demo</strong></div>
+              <div class="detail-row"><span>Customer ops users</span><strong>Use <a href="https://ops.naaval.eu" target="_blank" rel="noopener noreferrer">ops.naaval.eu</a></strong></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="form-actions admin-actions">
+          <button class="ghost-button" type="button" data-action="logout">Switch Account</button>
+          <button class="solid-button" type="button" data-action="open-live-ops">Open Ops Dashboard</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderAdminView() {
+  if (isBackofficeViewActive()) {
+    return renderSaasAdminView();
+  }
+
+  if (isSaasAdminMode() && !isPlatformAdmin()) {
+    return renderSaasAdminAccessDeniedView();
+  }
+
   const editingOpsUser = state.editingOpsUserId ? state.opsUsers.find((candidate) => candidate.id === state.editingOpsUserId) : null;
   const roleOptions = [
     ["company_admin", "Company Admin"],
@@ -6775,7 +7777,8 @@ function renderAdminPricingModalForm() {
   }
 
   const algo = getAdminPricingAlgoMeta(state.selectedAdminPricingAlgo);
-  const config = getPricingConfig();
+  const targetTenant = selectedTenantRecord();
+  const config = getAdminPricingTargetConfig();
   let fieldsMarkup = "";
 
   if (algo.id === "basic") {
@@ -6873,7 +7876,7 @@ function renderAdminPricingModalForm() {
   content.innerHTML = `
     <p class="eyebrow">Setup Algo</p>
     <h3 class="modal__title">${escapeHtml(algo.title)}</h3>
-    <p class="modal__subtitle">${escapeHtml(algo.description)}</p>
+    <p class="modal__subtitle">${escapeHtml(isBackofficeViewActive() && targetTenant ? `${algo.description} Changes will apply to ${targetTenant.companyName || targetTenant.displayName || targetTenant.id}.` : algo.description)}</p>
 
     <form id="pricing-algo-form" class="stack">
       <input type="hidden" name="algoId" value="${algo.id}" />
@@ -7107,6 +8110,14 @@ async function ensureSelectedRouteGeometry() {
 }
 
 function render() {
+  if (isSaasAdminMode()) {
+    state.activeView = "admin";
+    if (isPlatformAdmin() && !["kpis", "customers", "algorithms", "users"].includes(state.adminSection)) {
+      state.adminSection = "kpis";
+    }
+  } else if (state.activeView === "admin") {
+    state.activeView = "orders";
+  }
   const activeModule = VIEW_MODULE_REQUIREMENTS[state.activeView];
   if (state.activeView !== "admin" && activeModule && !isModuleEnabled(activeModule)) {
     state.activeView = "orders";
@@ -7114,10 +8125,44 @@ function render() {
   document.querySelector(".main")?.classList.toggle("main--pricing", state.activeView === "pricing");
   document.querySelector(".main")?.classList.toggle("main--orders-summary", state.activeView === "orders");
   document.querySelector(".main")?.classList.toggle("main--optimizer", state.activeView === "optimizer");
+  document.querySelector(".main")?.classList.toggle("main--saas-admin", isSaasAdminMode());
+  document.querySelector(".summary-controls")?.classList.toggle("hidden", isSaasAdminMode());
+  document.querySelector(".summary-grid")?.classList.toggle("hidden", isSaasAdminMode());
+  document.querySelector(".hero__meta")?.classList.toggle("hidden", isSaasAdminMode());
+  const heroEyebrow = document.querySelector(".hero .eyebrow");
+  const heroTitle = document.querySelector(".hero__title");
   const heroName = document.querySelector(".hero__title span");
-  if (heroName) {
-    heroName.textContent = state.currentUser?.firstName || state.currentUser?.name?.split(" ")[0] || "Pierre";
+  const heroSubtitle = document.querySelector(".hero__subtitle");
+  if (isSaasAdminMode()) {
+    if (heroEyebrow) {
+      heroEyebrow.textContent = "Naaval SaaS Backoffice";
+    }
+    if (heroTitle) {
+      heroTitle.firstChild.textContent = "Manage, ";
+    }
+    if (heroName) {
+      heroName.textContent = state.currentUser?.firstName || state.currentUser?.name?.split(" ")[0] || "Admin";
+    }
+    if (heroSubtitle) {
+      heroSubtitle.textContent = isPlatformAdmin()
+        ? "Oversee tenants, configure algorithms, adjust plans, and pilot the full Naaval client base from one control layer."
+        : "Use a Naaval internal admin account to unlock the SaaS back-office. Customer ops accounts should use the operations dashboard instead.";
+    }
+  } else {
+    if (heroEyebrow) {
+      heroEyebrow.textContent = "Naaval Control Tower";
+    }
+    if (heroTitle) {
+      heroTitle.firstChild.textContent = "Welcome, ";
+    }
+    if (heroName) {
+      heroName.textContent = state.currentUser?.firstName || state.currentUser?.name?.split(" ")[0] || "Pierre";
+    }
+    if (heroSubtitle) {
+      heroSubtitle.textContent = "Create orders, supervise drivers, and push route optimization from one operational surface.";
+    }
   }
+  renderPrimaryCta();
   renderNav();
   renderMetrics();
   renderPanelHeader();
@@ -7126,6 +8171,7 @@ function render() {
   renderOrderDetailModal();
   renderDriverDetailModal();
   renderCustomerDetailModal();
+  renderBackofficeTenantDetailModal();
   renderOpsUserDetailModal();
   renderRecurringRouteDetailModal();
   renderAdminPricingModalForm();
@@ -7992,6 +9038,7 @@ async function handleDriverSubmit(event) {
       lastName,
       email: form.elements.email.value.trim(),
       phone: form.elements.phone.value.trim(),
+      temporaryPassword: form.elements.temporaryPassword.value.trim() || existingDriver?.temporaryPassword || "demo",
       skills: serializeSkills(form.elements.skills.value),
       vehicleType: form.elements.vehicleType.value,
       vehiclePhotoUrls: mergedVehiclePhotoUrls,
@@ -8157,6 +9204,114 @@ async function handleOpsUserSubmit(event) {
   }
 }
 
+async function handleTenantCreateSubmit(event) {
+  event.preventDefault();
+
+  if (!isPlatformAdmin()) {
+    showToast("Customer creation is reserved to the Naaval back-office.", "error");
+    return;
+  }
+
+  const form = event.currentTarget;
+  const payload = {
+    companyName: form.elements.companyName.value.trim(),
+    displayName: form.elements.displayName.value.trim() || form.elements.companyName.value.trim(),
+    planId: form.elements.planId.value || "starter",
+    status: form.elements.status.value || "active",
+    adminFirstName: form.elements.adminFirstName.value.trim(),
+    adminLastName: form.elements.adminLastName.value.trim(),
+    adminEmail: form.elements.adminEmail.value.trim(),
+    adminPhone: form.elements.adminPhone.value.trim(),
+    temporaryPassword: form.elements.temporaryPassword.value.trim() || "demo"
+  };
+
+  if (!payload.companyName || !payload.adminFirstName || !payload.adminLastName || !payload.adminEmail) {
+    showToast("Company name, admin first name, admin last name, and admin email are required.", "error");
+    return;
+  }
+
+  try {
+    let createdTenant = null;
+
+    if (state.apiAvailable) {
+      createdTenant = await postJson("/admin/tenants", payload);
+      await refreshData();
+    } else {
+      const timestamp = new Date().toISOString();
+      createdTenant = {
+        id: createId("tenant"),
+        companyId: "",
+        slug: slugify(payload.companyName),
+        companyName: payload.companyName,
+        displayName: payload.displayName,
+        status: payload.status,
+        planId: payload.planId,
+        enabledModules: [],
+        disabledModules: [],
+        enabledAlgorithms: [],
+        disabledAlgorithms: [],
+        usageOverrides: {},
+        moduleOverrides: {},
+        algorithmOverrides: {},
+        signupMeta: {
+          createdByEmail: payload.adminEmail,
+          phone: payload.adminPhone
+        },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      createdTenant.companyId = createdTenant.id;
+      localDb.tenants = [createdTenant, ...(localDb.tenants ?? [])];
+      localDb.tenantPricingConfigs = localDb.tenantPricingConfigs ?? {};
+      localDb.tenantPricingConfigs[createdTenant.id] = structuredClone(localDb.pricingConfig ?? buildDefaultPricingConfig());
+      localDb.hubs = [
+        {
+          id: createId("hub"),
+          tenantId: createdTenant.id,
+          companyId: createdTenant.id,
+          label: `${payload.companyName} Main Hub`,
+          city: "",
+          address: "",
+          coordinates: { lat: 48.8566, lon: 2.3522 },
+          createdAt: timestamp,
+          updatedAt: timestamp
+        },
+        ...(localDb.hubs ?? [])
+      ];
+      localDb.opsUsers = [
+        {
+          id: createId("ops_user"),
+          tenantId: createdTenant.id,
+          companyId: createdTenant.id,
+          firstName: payload.adminFirstName,
+          lastName: payload.adminLastName,
+          email: payload.adminEmail.toLowerCase(),
+          phone: payload.adminPhone,
+          role: "company_admin",
+          team: payload.companyName,
+          temporaryPassword: payload.temporaryPassword,
+          status: "active",
+          createdAt: timestamp,
+          updatedAt: timestamp
+        },
+        ...(localDb.opsUsers ?? [])
+      ];
+      loadFromLocal();
+      ensureSelections();
+      render();
+    }
+
+    state.selectedTenantId = createdTenant?.tenant?.id ?? createdTenant?.id ?? state.selectedTenantId;
+    closeModal("tenant-create");
+    form.reset();
+    await loadSelectedTenantDetail(state.selectedTenantId, { renderAfter: true });
+    openModal("tenant-detail");
+    showToast(`Customer ${payload.companyName} created.`);
+  } catch (error) {
+    showToast(`Unable to create customer: ${error.message}`, "error");
+  }
+}
+
 async function handleTenantSubmit(event) {
   event.preventDefault();
 
@@ -8175,22 +9330,24 @@ async function handleTenantSubmit(event) {
   const currentTenant = state.tenants.find((tenant) => tenant.id === tenantId);
   const currentModules = currentTenant?.tenantContext?.modules ?? [];
   const currentAlgorithms = currentTenant?.tenantContext?.algorithms ?? [];
-  const nextModules = Object.keys(state.modulesCatalog ?? {}).reduce((accumulator, moduleId) => {
-    accumulator[moduleId] = form.elements[`moduleOverride_${moduleId}`]?.checked ?? currentModules.includes(moduleId);
-    return accumulator;
-  }, {});
-  const nextAlgorithms = Object.keys(state.algorithmsCatalog ?? {}).reduce((accumulator, algorithmId) => {
-    accumulator[algorithmId] = form.elements[`algorithmOverride_${algorithmId}`]?.checked ?? currentAlgorithms.includes(algorithmId);
-    return accumulator;
-  }, {});
+  const nextEnabledModules = Object.keys(state.modulesCatalog ?? {}).filter(
+    (moduleId) => form.elements[`moduleOverride_${moduleId}`]?.checked ?? currentModules.includes(moduleId)
+  );
+  const nextDisabledModules = Object.keys(state.modulesCatalog ?? {}).filter((moduleId) => !nextEnabledModules.includes(moduleId));
+  const nextEnabledAlgorithms = Object.keys(state.algorithmsCatalog ?? {}).filter(
+    (algorithmId) => form.elements[`algorithmOverride_${algorithmId}`]?.checked ?? currentAlgorithms.includes(algorithmId)
+  );
+  const nextDisabledAlgorithms = Object.keys(state.algorithmsCatalog ?? {}).filter((algorithmId) => !nextEnabledAlgorithms.includes(algorithmId));
 
   const payload = {
     companyName: form.elements.companyName.value.trim(),
     displayName: form.elements.displayName.value.trim(),
     planId: form.elements.planId.value,
     status: form.elements.status.value,
-    moduleOverrides: nextModules,
-    algorithmOverrides: nextAlgorithms,
+    enabledModules: nextEnabledModules,
+    disabledModules: nextDisabledModules,
+    enabledAlgorithms: nextEnabledAlgorithms,
+    disabledAlgorithms: nextDisabledAlgorithms,
     usageOverrides: {
       drivers: Number.parseInt(form.elements.usageDrivers.value || "0", 10) || 0,
       ordersPerMonth: form.elements.usageOrders.value.trim() || "Unlimited"
@@ -8200,9 +9357,12 @@ async function handleTenantSubmit(event) {
   try {
     const updatedTenant = await patchJson(`/admin/tenants/${tenantId}`, payload);
     await refreshData();
-    state.selectedTenantId = updatedTenant.id;
+    const updatedTenantRecord = updatedTenant?.tenant ?? updatedTenant;
+    state.selectedTenantId = updatedTenantRecord.id;
+    await loadSelectedTenantDetail(state.selectedTenantId, { renderAfter: false });
+    openModal("tenant-detail");
     render();
-    showToast(`Tenant ${updatedTenant.companyName || updatedTenant.displayName} updated.`);
+    showToast(`Tenant ${updatedTenantRecord.companyName || updatedTenantRecord.displayName} updated.`);
   } catch (error) {
     showToast(`Unable to update tenant: ${error.message}`, "error");
   }
@@ -8252,6 +9412,7 @@ async function handleCustomerSubmit(event) {
     vatNumber: form.elements.vatNumber.value.trim(),
     companyPhone: form.elements.companyPhone.value.trim(),
     companyEmail: form.elements.companyEmail.value.trim(),
+    portalPassword: form.elements.portalPassword.value.trim() || existingAccountCustomer?.portalPassword || "demo",
     contactFirstName: form.elements.contactFirstName.value.trim(),
     contactLastName: form.elements.contactLastName.value.trim(),
     contactPhone: form.elements.contactPhone.value.trim(),
@@ -8582,7 +9743,7 @@ function buildPricingConfigFromForm(form) {
 function buildPricingConfigFromAlgoForm(form) {
   const fields = form.elements;
   const algoId = fields.algoId.value;
-  const config = clone(getPricingConfig());
+  const config = clone(getAdminPricingTargetConfig());
 
   if (algoId === "basic") {
     config.basic = {
@@ -8640,12 +9801,27 @@ function buildPricingConfigFromAlgoForm(form) {
 }
 
 async function savePricingConfig(config) {
-  state.pricingConfig = clone(config);
+  const targetTenantId = isBackofficeViewActive() ? state.selectedTenantId : null;
+  if (targetTenantId) {
+    state.selectedTenantPricingConfig = clone(config);
+    if (state.selectedTenantDetail?.tenant?.id === targetTenantId) {
+      state.selectedTenantDetail.pricingConfig = clone(config);
+    }
+  } else {
+    state.pricingConfig = clone(config);
+  }
   ensurePricingState();
 
   if (state.apiAvailable) {
-    const response = await postJson("/pricing/config", config);
-    state.pricingConfig = clone(response.config ?? config);
+    const response = await postJson("/pricing/config", targetTenantId ? { ...config, tenantId: targetTenantId } : config);
+    if (targetTenantId) {
+      state.selectedTenantPricingConfig = clone(response.config ?? config);
+      if (state.selectedTenantDetail?.tenant?.id === targetTenantId) {
+        state.selectedTenantDetail.pricingConfig = clone(response.config ?? config);
+      }
+    } else {
+      state.pricingConfig = clone(response.config ?? config);
+    }
     render();
     return;
   }
@@ -8654,7 +9830,12 @@ async function savePricingConfig(config) {
     localDb = buildFallbackDb();
   }
 
-  localDb.pricingConfig = clone(config);
+  if (targetTenantId) {
+    localDb.tenantPricingConfigs = localDb.tenantPricingConfigs ?? {};
+    localDb.tenantPricingConfigs[targetTenantId] = clone(config);
+  } else {
+    localDb.pricingConfig = clone(config);
+  }
   render();
 }
 
@@ -8678,7 +9859,8 @@ async function handlePricingAlgoSubmit(event) {
     const algo = getAdminPricingAlgoMeta(event.currentTarget.elements.algoId.value);
     await savePricingConfig(config);
     closeModal("admin-pricing");
-    showToast(`${algo.title} configuration saved.`);
+    const tenant = isBackofficeViewActive() ? selectedTenantRecord() : null;
+    showToast(tenant ? `${algo.title} saved for ${tenant.companyName || tenant.displayName || tenant.id}.` : `${algo.title} configuration saved.`);
   } catch (error) {
     showToast(`Unable to save pricing config: ${error.message}`, "error");
   }
@@ -8687,7 +9869,8 @@ async function handlePricingAlgoSubmit(event) {
 async function resetPricingConfig() {
   try {
     await savePricingConfig(buildDefaultPricingConfig());
-    showToast("Pricing configuration reset to defaults.");
+    const tenant = isBackofficeViewActive() ? selectedTenantRecord() : null;
+    showToast(tenant ? `Pricing reset to defaults for ${tenant.companyName || tenant.displayName || tenant.id}.` : "Pricing configuration reset to defaults.");
   } catch (error) {
     showToast(`Unable to reset pricing config: ${error.message}`, "error");
   }
@@ -9371,6 +10554,16 @@ function handleDocumentClick(event) {
       return;
     }
 
+    if (action === "open-backoffice-create-tenant") {
+      openTenantCreateModal();
+      return;
+    }
+
+    if (action === "open-live-ops") {
+      window.open("https://ops.naaval.eu", "_blank", "noopener,noreferrer");
+      return;
+    }
+
     if (action === "logout") {
       logout();
       showToast("Session closed.");
@@ -9500,9 +10693,22 @@ function handleDocumentClick(event) {
       return;
     }
 
+    if (action === "open-tenant-detail") {
+      state.selectedTenantId = actionButton.getAttribute("data-tenant-id");
+      state.selectedTenantDetail = null;
+      state.selectedTenantPricingConfig = null;
+      void loadSelectedTenantDetail(state.selectedTenantId, { renderAfter: true });
+      render();
+      openModal("tenant-detail");
+      return;
+    }
+
     if (action === "select-tenant") {
       state.selectedTenantId = actionButton.getAttribute("data-tenant-id");
-      state.adminSection = "tenants";
+      state.selectedTenantDetail = null;
+      state.selectedTenantPricingConfig = null;
+      state.adminSection = isBackofficeViewActive() ? (state.adminSection === "algorithms" ? "algorithms" : state.adminSection) : "tenants";
+      void loadSelectedTenantDetail(state.selectedTenantId, { renderAfter: true });
       render();
       return;
     }
@@ -9711,6 +10917,11 @@ function handleDocumentSubmit(event) {
     return;
   }
 
+  if (event.target.matches("#tenant-create-form")) {
+    handleTenantCreateSubmit(event);
+    return;
+  }
+
   if (event.target.matches("#tenant-form")) {
     handleTenantSubmit(event);
     return;
@@ -9731,6 +10942,7 @@ function handleLoginSubmit(event) {
     const password = form.elements.password.value.trim();
 
     if (!email || !password) {
+      setOpsLoginStatus("Use a valid ops email and the matching temporary password.", "error");
       showToast("Use a valid ops email and the matching temporary password.", "error");
       return;
     }
@@ -9739,8 +10951,18 @@ function handleLoginSubmit(event) {
       const session = await postJson("/auth/login", { email, password });
       applyAuthenticatedSession(session);
       await refreshData();
+      setOpsLoginStatus("");
       showToast(`Welcome back ${session.firstName ?? "Ops"}.`);
     } catch (error) {
+      const prototypeProfile = findPrototypeOpsProfile(email, password);
+      if (prototypeProfile) {
+        loginWithProfile(prototypeProfile, "prototype");
+        await refreshData();
+        setOpsLoginStatus("");
+        showToast(`Welcome back ${prototypeProfile.firstName ?? "Ops"} (prototype mode).`);
+        return;
+      }
+      setOpsLoginStatus(error.message || "Use a valid ops email and the matching temporary password.", "error");
       showToast(error.message || "Use a valid ops email and the matching temporary password.", "error");
     }
   })();
@@ -9749,12 +10971,14 @@ function handleLoginSubmit(event) {
 function handleGoogleLogin() {
   const clientId = getOpsConfigValue("NAAVAL_GOOGLE_CLIENT_ID");
   if (!clientId) {
+    setOpsLoginStatus("Google Sign-In needs a Google Client ID in ops-config.js for this environment.", "error");
     showToast("Google Sign-In needs a Google Client ID in ops-config.js for this environment.", "error");
     return;
   }
 
   if (!window.google?.accounts?.id) {
     setupGoogleIdentity();
+    setOpsLoginStatus("Google Sign-In is still loading. Retry in a second.", "error");
     showToast("Google Sign-In is still loading. Retry in a second.", "error");
     return;
   }
@@ -9766,6 +10990,7 @@ function handleGoogleLogin() {
   setupGoogleIdentity();
   window.setTimeout(() => {
     if (!triggerRenderedGoogleButton()) {
+      setOpsLoginStatus("Google Sign-In could not open. Check the authorized JavaScript origins for this URL.", "error");
       showToast("Google Sign-In could not open. Check the authorized JavaScript origins for this URL.", "error");
     }
   }, 250);
@@ -9811,6 +11036,18 @@ async function initialize() {
       }
       await refreshData();
     } catch (_error) {
+      const source = String(session?.source ?? state.currentUser?.source ?? "").trim().toLowerCase();
+      const prototypeProfile =
+        source.includes("prototype") && session?.email
+          ? findPrototypeOpsProfileByEmail(session.email, source)
+          : null;
+
+      if (prototypeProfile) {
+        loginWithProfile(prototypeProfile, source || "prototype");
+        await refreshData();
+        return;
+      }
+
       logout();
     }
   } else {
