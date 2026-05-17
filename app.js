@@ -336,6 +336,28 @@ function getBooleanOpsConfigValue(key) {
   return value === true || String(value).toLowerCase() === "true";
 }
 
+function getCarrierWorkspaceUrl() {
+  const configuredUrl = normalizeApiBaseUrl(getOpsConfigValue("NAAVAL_CARRIER_BASE_URL"));
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  return isLocalRuntimeHost() ? "/carrier/" : "https://carrier-app-ebon.vercel.app";
+}
+
+function getCarrierInstallUrl() {
+  const configuredUrl = normalizeApiBaseUrl(getOpsConfigValue("NAAVAL_CARRIER_INSTALL_URL"));
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  if (isLocalRuntimeHost()) {
+    return "/carrier/install";
+  }
+
+  return `${getCarrierWorkspaceUrl().replace(/\/+$/, "")}/install`;
+}
+
 function slugify(value, fallback = "customer") {
   const slug = String(value ?? "")
     .trim()
@@ -3877,6 +3899,7 @@ function renderToolbar() {
   if (state.activeView === "drivers") {
     toolbar.innerHTML = `
       <button class="ghost-button" type="button" data-action="refresh">Refresh</button>
+      <button class="ghost-button" type="button" data-action="open-carrier-install">Carrier App Install</button>
       <button class="ghost-button" type="button" data-open-modal="carrier-company">Add Carrier Company</button>
       <button class="solid-button" type="button" data-open-modal="driver">Add Driver</button>
     `;
@@ -4427,6 +4450,10 @@ function renderDriverDetail(driver) {
             <div class="detail-row"><span>Shift</span><strong>${escapeHtml(driver.shiftSummary)}</strong></div>
             <div class="detail-row"><span>Live Routes</span><strong>${driver.assignedRoutes}</strong></div>
             <div class="detail-row"><span>Completed Routes</span><strong>${driver.completedRoutes}</strong></div>
+          </div>
+          <div class="detail-actions">
+            <a class="ghost-button" href="${escapeHtml(getCarrierInstallUrl())}" target="_blank" rel="noopener noreferrer">Install on iPhone</a>
+            <a class="subtle-button" href="${escapeHtml(getCarrierWorkspaceUrl())}" target="_blank" rel="noopener noreferrer">Open Carrier App</a>
           </div>
         </section>
 
@@ -10561,6 +10588,16 @@ function handleDocumentClick(event) {
 
     if (action === "open-live-ops") {
       window.open("https://ops.naaval.eu", "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (action === "open-carrier-install") {
+      window.open(getCarrierInstallUrl(), "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (action === "open-carrier-app") {
+      window.open(getCarrierWorkspaceUrl(), "_blank", "noopener,noreferrer");
       return;
     }
 
